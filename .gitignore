@@ -1,0 +1,28 @@
+# macOS
+.DS_Store
+
+# IDE-local state
+.idea/
+*.iml
+.osx.project
+
+# CMake and firmware build products
+build/
+cmake-build-*/
+out/
+CMakeCache.txt
+CMakeFiles/
+Testing/
+*.bin
+*.elf
+*.hex
+*.map
+*.lst
+*.o
+*.obj
+*.d
+*.su
+
+# Local documents and unrelated example projects
+doc_work/
+hitachi_ir_remote/
