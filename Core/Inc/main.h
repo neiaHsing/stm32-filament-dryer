@@ -63,6 +63,10 @@ void Error_Handler(void);
 #define LED_GPIO_Port GPIOC
 #define BUTTON_Pin GPIO_PIN_1
 #define BUTTON_GPIO_Port GPIOA
+#define MOTOR_IN1_Pin GPIO_PIN_0
+#define MOTOR_IN1_GPIO_Port GPIOA
+#define MOTOR_IN2_Pin GPIO_PIN_2
+#define MOTOR_IN2_GPIO_Port GPIOA
 #define FAN_TACH_Pin GPIO_PIN_8
 #define FAN_TACH_GPIO_Port GPIOA
 #define ENCODER_S2_Pin GPIO_PIN_0

@@ -502,8 +502,9 @@ void OLED_Init(void)
     OLED_SetDispStartLine(0x00);
     OLED_SetChargePump(PUMP_ENABLE);
     OLED_SetMemAddrMode(PAGE_ADDR_MODE);
-    OLED_SEG_REMAP();
-    OLED_SCAN_REMAP();
+    /* The module is installed upside down, so rotate the panel by 180 deg. */
+    OLED_SEG_NOREMAP();
+    OLED_SCAN_NORMAL();
     OLED_SetComConfig(COM_PIN_ALT, COM_NOREMAP);
     OLED_SetContrastValue(0x7F);
     OLED_SetPreChargePeriod(0x01, 0x0F);

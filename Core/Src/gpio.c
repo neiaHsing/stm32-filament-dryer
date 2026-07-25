@@ -53,6 +53,9 @@ void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
 
+  /* DRV8870: both inputs low keeps the motor stopped during startup. */
+  HAL_GPIO_WritePin(GPIOA, MOTOR_IN1_Pin|MOTOR_IN2_Pin, GPIO_PIN_RESET);
+
   /* XY-MOS is active high, so a low level keeps it off at startup. */
   HAL_GPIO_WritePin(XY_MOS_IN_GPIO_Port, XY_MOS_IN_Pin, GPIO_PIN_RESET);
 
@@ -65,6 +68,20 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LED_GPIO_Port, &GPIO_InitStruct);
+
+  /* DRV8870 IN2 selects the forward direction when held low. */
+  GPIO_InitStruct.Pin = MOTOR_IN2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(MOTOR_IN2_GPIO_Port, &GPIO_InitStruct);
+
+  /* DRV8870 IN1: PA0/TIM2_CH1, 20 kHz motor PWM. */
+  GPIO_InitStruct.Pin = MOTOR_IN1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+  HAL_GPIO_Init(MOTOR_IN1_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : PA1 */
   GPIO_InitStruct.Pin = BUTTON_Pin;

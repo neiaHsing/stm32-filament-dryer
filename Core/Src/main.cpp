@@ -40,6 +40,11 @@ constexpr uint32_t kPwmTimerClockHz = 72000000U;
 constexpr uint32_t kPwmCounterClockHz = 10000U;
 constexpr uint32_t kPwmFrequencyHz = 10U;
 constexpr bool kXyMosActiveHigh = true;
+constexpr uint32_t kMotorPwmFrequencyHz = 20000U;
+constexpr uint32_t kMotorPwmPeriodCounts =
+    kPwmTimerClockHz / kMotorPwmFrequencyHz;
+constexpr uint32_t kMotorDutyPercent = 100U;
+static_assert(kMotorDutyPercent <= 100U, "Motor duty must be 0..100 percent");
 volatile int8_t g_encoderTransitionAccumulator = 0;
 volatile int16_t g_encoderPendingSteps = 0;
 volatile uint8_t g_encoderPreviousState = 3U;
@@ -97,6 +102,7 @@ struct RuntimeState
 {
   bool running = false;
   bool heaterOn = false;
+  bool motorOn = false;
   bool dryingNeeded = true;
   FaultCode fault = FaultCode::None;
   uint32_t runStartTick = 0U;
@@ -277,6 +283,20 @@ void InitHeaterPwm()
   TIM4->CR1 = TIM_CR1_ARPE | TIM_CR1_CEN;
 }
 
+void InitMotorPwm()
+{
+  RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
+  TIM2->CR1 = 0U;
+  TIM2->CCER = 0U;
+  TIM2->PSC = 0U;
+  TIM2->ARR = kMotorPwmPeriodCounts - 1U;
+  TIM2->CCR1 = 0U;
+  TIM2->CCMR1 = (6U << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
+  TIM2->EGR = TIM_EGR_UG;
+  TIM2->CCER = TIM_CCER_CC1E;
+  TIM2->CR1 = TIM_CR1_ARPE | TIM_CR1_CEN;
+}
+
 bool SetHeaterOutput(RuntimeState &runtime, bool enabled)
 {
   if (runtime.heaterOn == enabled)
@@ -292,6 +312,45 @@ bool SetHeaterOutput(RuntimeState &runtime, bool enabled)
   return true;
 }
 
+bool SetMotorOutput(RuntimeState &runtime, bool enabled)
+{
+  if (runtime.motorOn == enabled)
+  {
+    return false;
+  }
+
+  if (enabled)
+  {
+    HAL_GPIO_WritePin(MOTOR_IN2_GPIO_Port, MOTOR_IN2_Pin, GPIO_PIN_RESET);
+    TIM2->CCR1 =
+        (kMotorPwmPeriodCounts * kMotorDutyPercent) / 100U;
+  }
+  else
+  {
+    TIM2->CCR1 = 0U;
+    HAL_GPIO_WritePin(MOTOR_IN2_GPIO_Port, MOTOR_IN2_Pin, GPIO_PIN_RESET);
+  }
+  TIM2->EGR = TIM_EGR_UG;
+  runtime.motorOn = enabled;
+  return true;
+}
+
+bool SetDryingOutputs(RuntimeState &runtime, bool enabled)
+{
+  bool changed = false;
+  if (enabled)
+  {
+    changed = SetMotorOutput(runtime, true) || changed;
+    changed = SetHeaterOutput(runtime, true) || changed;
+  }
+  else
+  {
+    changed = SetHeaterOutput(runtime, false) || changed;
+    changed = SetMotorOutput(runtime, false) || changed;
+  }
+  return changed;
+}
+
 void UpdateElapsedTime(RuntimeState &runtime, uint32_t now)
 {
   if (runtime.running)
@@ -303,16 +362,16 @@ void UpdateElapsedTime(RuntimeState &runtime, uint32_t now)
 bool StopRun(RuntimeState &runtime, uint32_t now)
 {
   UpdateElapsedTime(runtime, now);
-  const bool changed = runtime.running || runtime.heaterOn;
+  const bool changed = runtime.running || runtime.heaterOn || runtime.motorOn;
   runtime.running = false;
-  SetHeaterOutput(runtime, false);
+  SetDryingOutputs(runtime, false);
   return changed;
 }
 
 bool LatchFault(RuntimeState &runtime, FaultCode fault, uint32_t now)
 {
   const bool changed = runtime.fault != fault || runtime.running ||
-                       runtime.heaterOn;
+                       runtime.heaterOn || runtime.motorOn;
   StopRun(runtime, now);
   runtime.fault = fault;
   return changed;
@@ -443,13 +502,13 @@ bool UpdateControl(RuntimeState &runtime, const Settings &settings,
 
   if (!runtime.running || runtime.fault != FaultCode::None)
   {
-    return SetHeaterOutput(runtime, false);
+    return SetDryingOutputs(runtime, false) || changed;
   }
 
   const uint32_t runTimeMs = now - runtime.runStartTick;
   if (runTimeMs < kFanStartupGraceMs)
   {
-    return SetHeaterOutput(runtime, false);
+    return SetDryingOutputs(runtime, false) || changed;
   }
 
   if (!fan.sampleValid || !fan.running)
@@ -460,7 +519,7 @@ bool UpdateControl(RuntimeState &runtime, const Settings &settings,
   if (!HeatingConfigured(settings))
   {
     runtime.dryingNeeded = false;
-    return SetHeaterOutput(runtime, false);
+    return SetDryingOutputs(runtime, false) || changed;
   }
 
   if (!sensor.valid)
@@ -496,7 +555,7 @@ bool UpdateControl(RuntimeState &runtime, const Settings &settings,
 
   if (!runtime.dryingNeeded)
   {
-    return SetHeaterOutput(runtime, false) || changed;
+    return SetDryingOutputs(runtime, false) || changed;
   }
 
   const int32_t targetTemperature =
@@ -506,13 +565,13 @@ bool UpdateControl(RuntimeState &runtime, const Settings &settings,
   const int32_t controlTemperature = MaximumTemperature(sensor);
   if (runtime.heaterOn && controlTemperature >= targetTemperature)
   {
-    changed = SetHeaterOutput(runtime, false) || changed;
+    changed = SetDryingOutputs(runtime, false) || changed;
   }
   else if (!runtime.heaterOn &&
            controlTemperature <=
                targetTemperature - kTemperatureHysteresisCentiC)
   {
-    changed = SetHeaterOutput(runtime, true) || changed;
+    changed = SetDryingOutputs(runtime, true) || changed;
   }
   return changed;
 }
@@ -623,6 +682,8 @@ void RenderDashboard(char lines[4][17], const Settings &settings,
   {
     PutText(lines[1], 5U, "WAIT");
   }
+  PutText(lines[1], 10U, "M:");
+  PutText(lines[1], 12U, runtime.motorOn ? "ON" : "OFF");
 
   const uint32_t elapsed = runtime.running
                                ? (now - runtime.runStartTick) / 1000U
@@ -786,8 +847,9 @@ int main(void)
   MX_SPI1_Init();
 
   InitHeaterPwm();
+  InitMotorPwm();
   RuntimeState runtime;
-  SetHeaterOutput(runtime, false);
+  SetDryingOutputs(runtime, false);
 
   HAL_Delay(100U);
   bool displayReady = OLED_Begin();
@@ -995,7 +1057,7 @@ int main(void)
       else
       {
         settings = draftSettings;
-        SetHeaterOutput(runtime, false);
+        SetDryingOutputs(runtime, false);
         if (settingsStorageReady)
         {
           const StoredSettings settingsToStore{
@@ -1108,8 +1170,14 @@ void Error_Handler(void)
 {
   __disable_irq();
 
-  /* Force PB8 back to GPIO mode so a peripheral fault cannot leave heat on. */
-  RCC->APB2ENR |= RCC_APB2ENR_IOPBEN;
+  /* Force power-control pins low even if a timer or peripheral has failed. */
+  RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
+  TIM2->CCER = 0U;
+  TIM2->CR1 = 0U;
+  RCC->APB2ENR |= RCC_APB2ENR_IOPAEN | RCC_APB2ENR_IOPBEN;
+  GPIOA->CRL = (GPIOA->CRL & ~((0x0FU << 0U) | (0x0FU << 8U))) |
+               (0x02U << 0U) | (0x02U << 8U);
+  GPIOA->BRR = MOTOR_IN1_Pin | MOTOR_IN2_Pin;
   GPIOB->CRH = (GPIOB->CRH & ~0x0FU) | 0x02U;
   if (kXyMosActiveHigh)
   {
