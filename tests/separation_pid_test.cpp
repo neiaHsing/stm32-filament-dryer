@@ -9,9 +9,17 @@ static float step(SeparationPid &p, float target, float measured) {
   return duty;
 }
 int main() {
-  // The controller has no additive ambient/target holding-power term.
-  SeparationPid noFeedforward;
-  assert(noFeedforward.step(60, 60, 1, 200, 2, 180, 2) == 0);
+  // Holding power is an additive target/ambient feedforward term.
+  SeparationPid withFeedforward;
+  const float target60Feedforward =
+      SeparationPid::holdingPower(60, AMBIENT_TEMPERATURE_DEFAULT_C);
+  assert(target60Feedforward > 565 && target60Feedforward < 566);
+  assert(withFeedforward.step(60, 60, 1, 200, 2, 180, 2) ==
+         target60Feedforward);
+  assert(std::fabs(SeparationPid::holdingPower(40,24)-289.6107f)<0.1f);
+  assert(std::fabs(SeparationPid::holdingPower(60,24)-535.9253f)<0.1f);
+  assert(SeparationPid::holdingPower(40,40)==0);
+  assert(SeparationPid::holdingPower(70,-10)<=850);
   SeparationPid p;
   assert(step(p,40,29.65f)==1000);
   assert(p.integral==0);
@@ -34,8 +42,18 @@ int main() {
   for (int i=0;i<8;++i) step(p,40,37+i*.3f);
   assert(p.integral==25); // Recovery must not bank additional integral.
   step(p,40,40.31f); // Rising-temperature braking remains bounded.
-  // Without a holding prior, a small positive overshoot may already produce
-  // zero output; larger overshoot must also remove heat.
+
+  // A rising approach inside the separation band still accumulates a
+  // reduced integral correction; it is no longer blocked by |derivative|.
+  p.reset();
+  step(p,40,38.5f);
+  const float approachIntegral = p.integral;
+  step(p,40,38.8f);
+  assert(p.integral > approachIntegral);
+  assert(p.derivative > 0.10f);
+  assert(p.integral > 0);
+
+  // Output decreases with overshoot, including the holding prior.
   for (float target : {40.0f, 65.0f, 70.0f}) {
     SeparationPid below, above;
     const float left = step(below,target,target+.29f);
@@ -46,13 +64,13 @@ int main() {
   p.reset();
   step(p,40,40);
   step(p,40,39);
-  const float proportionalOnly=200;
+  const float proportionalOnly=200 + SeparationPid::holdingPower(40);
   assert(p.previousOutput<=proportionalOnly+100.1f); // Falling boost is bounded.
   p.reset();
   step(p,40,40);
   const float catchFall=step(p,40,39.95f);
   assert(catchFall>20);
-  assert(catchFall<111);
+  assert(catchFall < SeparationPid::holdingPower(40) + 111);
 
   p.reset();
   for(int i=0;i<300;++i) assert(step(p,60,30)==1000);

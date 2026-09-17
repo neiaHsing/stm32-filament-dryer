@@ -15,7 +15,7 @@
 #include <cstring>
 
 extern "C" {
-volatile float g_pidKp = 160.0f;
+volatile float g_pidKp = 200.0f;
 volatile float g_pidKi = 2.0f;
 volatile float g_pidKd = 180.0f;
 volatile float g_pidSeparation = 2.0f;
@@ -932,7 +932,7 @@ bool UpdateControl(RuntimeState &runtime, const Settings &settings,
     runtime.pidTick = sensor.sampleTickMs;
     const float duty = runtime.pid.step(targetTemperature / 100.0f,
         controlTemperature / 100.0f, dt, g_pidKp, g_pidKi, g_pidKd,
-        g_pidSeparation);
+        g_pidSeparation, settings.ambientTemperatureC);
     changed = SetHeaterDuty(runtime, static_cast<uint16_t>(duty + 0.5f)) || changed;
   }
   // Keep circulation running throughout regulation, including zero heat demand.

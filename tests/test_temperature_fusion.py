@@ -68,14 +68,14 @@ int main() {
     SeparationPid expected;
     const auto duty=expected.step(40,39.82f,1,200,2,180,2);
     assert(run.heaterPermille==static_cast<uint16_t>(duty+0.5f));
-    // Ambient remains a displayed/transported setting, but no longer affects
-    // the PID output after the holding-power feedforward was removed.
+    // Ambient participates in the holding-power feedforward.
     for (int ambient : {-10, 22, 50}) {
         settings.ambientTemperatureC=ambient;
         settings.targetTemperatureC=60;
         run={}; run.running=true; s=sample(6000,6000);
         UpdateControl(run,settings,s,fan,10000);
-        assert(run.heaterPermille==0);
+        const auto expected = SeparationPid::holdingPower(60, ambient);
+        assert(run.heaterPermille==static_cast<uint16_t>(expected+0.5f));
     }
     for (bool firstHot : {false,true}) {
         s=firstHot?sample(7500,4000):sample(4000,7500);
