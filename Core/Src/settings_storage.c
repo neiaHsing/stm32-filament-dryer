@@ -13,7 +13,8 @@
 #define STORAGE_MAGIC_2           'Y'
 #define STORAGE_MAGIC_3           '1'
 #define STORAGE_VERSION_LEGACY    1U
-#define STORAGE_VERSION           2U
+#define STORAGE_VERSION_FLAGS     2U
+#define STORAGE_VERSION           3U
 #define STORAGE_FLAG_TEMPERATURE  0x01U
 #define STORAGE_FLAG_HUMIDITY     0x02U
 
@@ -74,15 +75,19 @@ static bool Storage_RecordValid(const uint8_t record[STORAGE_RECORD_SIZE])
       record[10] == STORAGE_VERSION_LEGACY &&
       record[11] == (uint8_t)(record[8] ^ record[9] ^ 0xA5U);
   const bool current_metadata =
-      record[10] == STORAGE_VERSION &&
+      record[10] == STORAGE_VERSION_FLAGS &&
       (record[11] &
        (uint8_t)~(STORAGE_FLAG_TEMPERATURE | STORAGE_FLAG_HUMIDITY)) == 0U;
+  const bool ambient_metadata =
+      record[10] == STORAGE_VERSION &&
+      (record[11] >> 2U) <=
+          AMBIENT_TEMPERATURE_MAX_C - AMBIENT_TEMPERATURE_MIN_C;
 
   return record[0] == STORAGE_MAGIC_0 &&
          record[1] == STORAGE_MAGIC_1 &&
          record[2] == STORAGE_MAGIC_2 &&
          record[3] == STORAGE_MAGIC_3 &&
-         (legacy_metadata || current_metadata) &&
+         (legacy_metadata || current_metadata || ambient_metadata) &&
          Storage_ReadU32(&record[12]) == Storage_Crc32(record, 12U);
 }
 
@@ -158,6 +163,9 @@ bool SettingsStorage_Init(SPI_HandleTypeDef *spi)
         storage_sequence = sequence;
         storage_current.target_temperature_c = record[8];
         storage_current.target_humidity_percent = record[9];
+        storage_current.ambient_temperature_c = record[10] == STORAGE_VERSION
+            ? (int8_t)((int16_t)(record[11] >> 2U) + AMBIENT_TEMPERATURE_MIN_C)
+            : AMBIENT_TEMPERATURE_DEFAULT_C;
         if (record[10] == STORAGE_VERSION_LEGACY)
         {
           storage_current.temperature_enabled = true;
@@ -202,7 +210,9 @@ bool SettingsStorage_Load(StoredSettings *settings)
 
 bool SettingsStorage_Save(const StoredSettings *settings)
 {
-  if (!storage_initialized || settings == NULL)
+  if (!storage_initialized || settings == NULL ||
+      settings->ambient_temperature_c < AMBIENT_TEMPERATURE_MIN_C ||
+      settings->ambient_temperature_c > AMBIENT_TEMPERATURE_MAX_C)
   {
     return false;
   }
@@ -211,7 +221,8 @@ bool SettingsStorage_Save(const StoredSettings *settings)
       settings->target_humidity_percent ==
           storage_current.target_humidity_percent &&
       settings->temperature_enabled == storage_current.temperature_enabled &&
-      settings->humidity_enabled == storage_current.humidity_enabled)
+      settings->humidity_enabled == storage_current.humidity_enabled &&
+      settings->ambient_temperature_c == storage_current.ambient_temperature_c)
   {
     return true;
   }
@@ -244,7 +255,9 @@ bool SettingsStorage_Save(const StoredSettings *settings)
   record[11] = (settings->temperature_enabled
                     ? STORAGE_FLAG_TEMPERATURE
                     : 0U) |
-               (settings->humidity_enabled ? STORAGE_FLAG_HUMIDITY : 0U);
+               (settings->humidity_enabled ? STORAGE_FLAG_HUMIDITY : 0U) |
+               ((uint8_t)(settings->ambient_temperature_c -
+                          AMBIENT_TEMPERATURE_MIN_C) << 2U);
   Storage_WriteU32(&record[12], Storage_Crc32(record, 12U));
 
   const uint32_t address = storage_sector_base[target_sector] +

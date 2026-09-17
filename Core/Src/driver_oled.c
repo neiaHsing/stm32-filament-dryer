@@ -572,6 +572,18 @@ void OLED_PutChar(uint8_t x, uint8_t y, char c)
     OLED_WriteNBytes((uint8_t*)&ascii_font[(uint8_t)c][8], 8);
 }
 
+void OLED_PutGlyph(uint8_t x, uint8_t y, const uint8_t glyph[16])
+{
+    if (glyph == NULL || y > 6 || x > 15)
+        return;
+
+    OLED_SetPosition(y, x * 8U);
+    OLED_WriteNBytes((uint8_t*)&glyph[0], 8);
+
+    OLED_SetPosition(y + 1U, x * 8U);
+    OLED_WriteNBytes((uint8_t*)&glyph[8], 8);
+}
+
 /*
  *  函数名：OLED_PrintString
  *  功能描述：显示一个字符串
