@@ -1,0 +1,44 @@
+menu "Temperature gateway configuration"
+
+config GATEWAY_WIFI_SSID
+    string "Wi-Fi station SSID"
+    default ""
+    help
+        Optional existing 2.4 GHz Wi-Fi network to join. The demonstration
+        access point remains enabled at 192.168.4.1 even when this is set.
+        This value can also be changed from the gateway Settings page and is
+        then stored in NVS.
+
+config GATEWAY_WIFI_PASSWORD
+    string "Wi-Fi station password"
+    default ""
+
+config GATEWAY_WIFI_DEFAULTS_REVISION
+    int "Compiled Wi-Fi defaults revision"
+    default 2
+    range 1 255
+    help
+        Increment this when the compiled station credentials are deliberately
+        changed. The first boot for a new revision replaces the stored station
+        credentials with the compiled defaults, then normal Settings page
+        changes are preserved in NVS.
+
+config GATEWAY_AP_SSID
+    string "Demonstration access point SSID"
+    default "Temperature-Gateway"
+
+config GATEWAY_AP_PASSWORD
+    string "Demonstration access point password"
+    default "temperature"
+    help
+        Must contain 8 to 63 characters.
+
+config GATEWAY_HISTORY_SAMPLES
+    int "Samples retained in ESP32 RAM"
+    range 60 3600
+    default 900
+    help
+        Samples arrive once per second, so 900 samples retain about 15
+        minutes. Larger values use more internal RAM.
+
+endmenu

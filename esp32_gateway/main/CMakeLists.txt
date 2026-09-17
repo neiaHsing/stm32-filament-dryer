@@ -1,0 +1,19 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "control_link.c"
+        "control_protocol.c"
+        "telemetry_protocol.c"
+        "telemetry_store.c"
+        "web_server.c"
+        "wifi_manager.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        driver
+        esp_event
+        esp_http_server
+        esp_netif
+        esp_timer
+        esp_wifi
+        nvs_flash
+)

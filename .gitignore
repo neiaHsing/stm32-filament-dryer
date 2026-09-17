@@ -26,3 +26,23 @@ Testing/
 # Local documents and unrelated example projects
 doc_work/
 hitachi_ir_remote/
+
+# ESP32-IDF local configuration and build products
+esp32_gateway/build/
+esp32_gateway/sdkconfig
+esp32_gateway/sdkconfig.old
+__pycache__/
+
+# Experimental captures and generated analysis artifacts. Keep the small,
+# human-readable reports in Git; raw logs, samples, plots, and firmware
+# snapshots remain local unless explicitly added with `git add -f`.
+outputs/**/*
+!outputs/**/
+!outputs/**/README.md
+!outputs/**/REPORT.md
+!outputs/**/analysis_report.md
+!outputs/**/EXPERIMENTS*.md
+
+# These firmware bundle notes refer to local binary release packages.
+outputs/stm32_feedforward_rollback_20260917/
+outputs/temperature_fusion_v2/

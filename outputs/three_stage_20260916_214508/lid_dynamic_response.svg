@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="620" viewBox="0 0 1100 620">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<style>text{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;fill:#1f2937}.grid{stroke:#e5e7eb;stroke-width:1}.axis{stroke:#374151;stroke-width:1}.small{font-size:12px}.label{font-size:14px}.title{font-size:21px;font-weight:600}</style>
+<text x="86" y="38" class="title">Dynamic response during the 10-second lid-open interval</text>
+<text x="86" y="61" class="small">Temperature drop: 5.09 C | average slope: -30.78 C/min | peak output: 100%</text>
+<rect x="86" y="80" width="984" height="220" fill="none" class="axis"/>
+<line x1="86" x2="1070" y1="300.0" y2="300.0" class="grid"/>
+<text x="74" y="304.0" text-anchor="end" class="small">64</text>
+<line x1="86" x2="1070" y1="245.0" y2="245.0" class="grid"/>
+<text x="74" y="249.0" text-anchor="end" class="small">66</text>
+<line x1="86" x2="1070" y1="190.0" y2="190.0" class="grid"/>
+<text x="74" y="194.0" text-anchor="end" class="small">68</text>
+<line x1="86" x2="1070" y1="135.0" y2="135.0" class="grid"/>
+<text x="74" y="139.0" text-anchor="end" class="small">70</text>
+<line x1="86" x2="1070" y1="80.0" y2="80.0" class="grid"/>
+<text x="74" y="84.0" text-anchor="end" class="small">72</text>
+<text x="20" y="190.0" transform="rotate(-90 20 190.0)" text-anchor="middle" class="label">Temperature (C)</text>
+<rect x="86" y="365" width="984" height="150" fill="none" class="axis"/>
+<line x1="86" x2="1070" y1="515.0" y2="515.0" class="grid"/>
+<text x="74" y="519.0" text-anchor="end" class="small">0</text>
+<line x1="86" x2="1070" y1="485.0" y2="485.0" class="grid"/>
+<text x="74" y="489.0" text-anchor="end" class="small">21</text>
+<line x1="86" x2="1070" y1="455.0" y2="455.0" class="grid"/>
+<text x="74" y="459.0" text-anchor="end" class="small">42</text>
+<line x1="86" x2="1070" y1="425.0" y2="425.0" class="grid"/>
+<text x="74" y="429.0" text-anchor="end" class="small">63</text>
+<line x1="86" x2="1070" y1="395.0" y2="395.0" class="grid"/>
+<text x="74" y="399.0" text-anchor="end" class="small">84</text>
+<line x1="86" x2="1070" y1="365.0" y2="365.0" class="grid"/>
+<text x="74" y="369.0" text-anchor="end" class="small">105</text>
+<text x="20" y="440.0" transform="rotate(-90 20 440.0)" text-anchor="middle" class="label">Output / humidity (%)</text>
+<line x1="86.0" x2="86.0" y1="80" y2="515" class="grid"/>
+<text x="86.0" y="540" text-anchor="middle" class="small">0.0</text>
+<line x1="282.8" x2="282.8" y1="80" y2="515" class="grid"/>
+<text x="282.8" y="540" text-anchor="middle" class="small">2.0</text>
+<line x1="479.6" x2="479.6" y1="80" y2="515" class="grid"/>
+<text x="479.6" y="540" text-anchor="middle" class="small">4.0</text>
+<line x1="676.4" x2="676.4" y1="80" y2="515" class="grid"/>
+<text x="676.4" y="540" text-anchor="middle" class="small">6.0</text>
+<line x1="873.2" x2="873.2" y1="80" y2="515" class="grid"/>
+<text x="873.2" y="540" text-anchor="middle" class="small">7.9</text>
+<line x1="1070.0" x2="1070.0" y1="80" y2="515" class="grid"/>
+<text x="1070.0" y="540" text-anchor="middle" class="small">9.9</text>
+<text x="580" y="575" text-anchor="middle" class="label">Seconds after lid opened</text>
+<polyline fill="none" stroke="#dc2626" stroke-width="2.8" points="86.0,129.2 221.7,131.2 302.6,152.9 382.6,174.0 520.7,195.2 601.4,210.6 689.2,224.1 808.5,240.9 901.6,253.3 989.3,263.2 1070.0,269.2"/>
+<polyline fill="none" stroke="#2563eb" stroke-width="2.2" points="86.0,413.6 221.7,417.4 302.6,406.7 382.6,372.1 520.7,372.1 601.4,372.1 689.2,372.1 808.5,372.1 901.6,372.1 989.3,372.1 1070.0,372.1"/>
+<polyline fill="none" stroke="#16a34a" stroke-width="2.2" points="86.0,499.6 221.7,499.8 302.6,500.8 382.6,501.6 520.7,502.6 601.4,503.2 689.2,503.8 808.5,504.1 901.6,504.4 989.3,504.5 1070.0,504.6"/>
+<circle cx="86.0" cy="129.2" r="3" fill="#dc2626"/>
+<circle cx="221.7" cy="131.2" r="3" fill="#dc2626"/>
+<circle cx="302.6" cy="152.9" r="3" fill="#dc2626"/>
+<circle cx="382.6" cy="174.0" r="3" fill="#dc2626"/>
+<circle cx="520.7" cy="195.2" r="3" fill="#dc2626"/>
+<circle cx="601.4" cy="210.6" r="3" fill="#dc2626"/>
+<circle cx="689.2" cy="224.1" r="3" fill="#dc2626"/>
+<circle cx="808.5" cy="240.9" r="3" fill="#dc2626"/>
+<circle cx="901.6" cy="253.3" r="3" fill="#dc2626"/>
+<circle cx="989.3" cy="263.2" r="3" fill="#dc2626"/>
+<circle cx="1070.0" cy="269.2" r="3" fill="#dc2626"/>
+<line x1="86" x2="1070" y1="135.0" y2="135.0" stroke="#d97706" stroke-dasharray="6 4"/>
+<line x1="86" x2="110" y1="600" y2="600" stroke="#dc2626" stroke-width="3"/>
+<text x="118" y="604" class="small">Temperature</text>
+<line x1="266" x2="290" y1="600" y2="600" stroke="#2563eb" stroke-width="3"/>
+<text x="298" y="604" class="small">Heater output</text>
+<line x1="446" x2="470" y1="600" y2="600" stroke="#16a34a" stroke-width="3"/>
+<text x="478" y="604" class="small">Humidity</text>
+</svg>

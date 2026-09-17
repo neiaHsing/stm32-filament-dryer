@@ -67,6 +67,10 @@ void OLED_Clear(void);
 */
 void OLED_PutChar(uint8_t x, uint8_t y, char c);
 
+/* Draw one custom 8x16 glyph. The first 8 bytes are the upper page and the
+ * second 8 bytes are the lower page, matching the built-in font layout. */
+void OLED_PutGlyph(uint8_t x, uint8_t y, const uint8_t glyph[16]);
+
 
 /*
  *  函数名：OLED_PrintString

@@ -502,8 +502,9 @@ void OLED_Init(void)
     OLED_SetDispStartLine(0x00);
     OLED_SetChargePump(PUMP_ENABLE);
     OLED_SetMemAddrMode(PAGE_ADDR_MODE);
-    OLED_SEG_REMAP();
-    OLED_SCAN_REMAP();
+    /* The module is installed upside down, so rotate the panel by 180 deg. */
+    OLED_SEG_NOREMAP();
+    OLED_SCAN_NORMAL();
     OLED_SetComConfig(COM_PIN_ALT, COM_NOREMAP);
     OLED_SetContrastValue(0x7F);
     OLED_SetPreChargePeriod(0x01, 0x0F);
@@ -569,6 +570,18 @@ void OLED_PutChar(uint8_t x, uint8_t y, char c)
     
     OLED_SetPosition(page + 1, col);
     OLED_WriteNBytes((uint8_t*)&ascii_font[(uint8_t)c][8], 8);
+}
+
+void OLED_PutGlyph(uint8_t x, uint8_t y, const uint8_t glyph[16])
+{
+    if (glyph == NULL || y > 6 || x > 15)
+        return;
+
+    OLED_SetPosition(y, x * 8U);
+    OLED_WriteNBytes((uint8_t*)&glyph[0], 8);
+
+    OLED_SetPosition(y + 1U, x * 8U);
+    OLED_WriteNBytes((uint8_t*)&glyph[8], 8);
 }
 
 /*

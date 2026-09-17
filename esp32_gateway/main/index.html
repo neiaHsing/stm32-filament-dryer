@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>温湿度控制台</title>
+  <style>
+    :root{color-scheme:dark;--bg:#07111f;--panel:#101d2d;--line:#263a50;--text:#ecf4ff;--muted:#92a7bd;--aht:#22d3a6;--hum:#f9c74f;--ok:#29d391;--warn:#ffb84d;--bad:#ff667a}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% -10%,#163656 0,transparent 38%),var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+    main{width:min(1120px,calc(100% - 28px));margin:0 auto;padding:28px 0 48px}header{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin-bottom:22px}
+    h1{font-size:clamp(24px,4vw,38px);line-height:1.1;margin:0 0 8px;letter-spacing:-.03em}h2{font-size:18px;margin:0 0 10px}p{margin:0;color:var(--muted)}
+    .badges{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px}.badge{border:1px solid var(--line);background:#0b1725;border-radius:999px;padding:7px 11px;color:var(--muted);white-space:nowrap}.badge.ok{color:var(--ok);border-color:#226c58}.badge.warn{color:var(--warn);border-color:#76572a}.badge.bad{color:var(--bad);border-color:#713241}
+    .cards{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-bottom:14px}.card,.panel{background:linear-gradient(145deg,rgba(18,34,52,.96),rgba(11,24,38,.96));border:1px solid var(--line);border-radius:16px;box-shadow:0 14px 38px rgba(0,0,0,.16)}.card{padding:18px}.label{color:var(--muted);font-size:13px}.value{font-size:clamp(26px,5vw,42px);font-weight:650;margin-top:5px;letter-spacing:-.04em}.unit{font-size:.48em;color:var(--muted);margin-left:4px}.aht .value{color:var(--aht)}.hum .value{color:var(--hum)}
+    .panel{padding:18px;margin-top:14px}.panel-head{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:14px}.actions{display:flex;gap:8px;flex-wrap:wrap}button,.button{appearance:none;border:1px solid #34506d;border-radius:9px;background:#18314b;color:var(--text);font:inherit;padding:9px 13px;cursor:pointer;text-decoration:none}button:hover,.button:hover{background:#20415f}button:disabled{opacity:.45;cursor:not-allowed}.start{background:#126246;border-color:#27946e}.start:hover{background:#177b59}.stop{background:#682536;border-color:#a9485e}.stop:hover{background:#7f2c41}.secondary{background:#142538}
+    .control-layout{display:grid;grid-template-columns:minmax(280px,1fr) minmax(300px,1.25fr);gap:16px}.control-form{background:#0a1624;border:1px solid #20364d;border-radius:12px;padding:14px}.control-fields{display:grid;grid-template-columns:1fr 1fr;gap:12px}.check{display:flex;align-items:center;gap:9px;color:var(--text);font-size:14px}.check input{width:auto;margin:0;accent-color:var(--ok)}.target{display:grid;gap:6px;color:var(--muted);font-size:13px}.target input{width:100%}.control-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.control-message{min-height:22px;margin-top:12px;color:var(--muted);font-size:13px}.control-message.ok{color:var(--ok)}.control-message.warn{color:var(--warn)}.control-message.bad{color:var(--bad)}
+    input{border:1px solid #30475f;border-radius:9px;background:#081522;color:var(--text);padding:10px 11px;font:inherit}input:disabled{opacity:.55}.detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.detail{background:#0a1624;border:1px solid #20364d;border-radius:10px;padding:11px}.detail span{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}.detail strong{font-size:14px;word-break:break-word}.chart-wrap{height:390px;position:relative}canvas{width:100%;height:100%;display:block}.legend{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:13px}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+    details{margin-top:14px}summary{cursor:pointer;font-weight:650;font-size:18px;list-style:none}summary::-webkit-details-marker{display:none}summary:after{content:"＋";float:right;color:var(--muted)}details[open] summary:after{content:"－"}.settings{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:18px}.settings label{display:grid;gap:6px;color:var(--muted);font-size:13px}.settings input{width:100%}.form-actions{grid-column:1/-1;display:flex;align-items:center;gap:12px}.form-message{font-size:13px;color:var(--muted)}.footnote{margin-top:12px;font-size:13px}
+    @media(max-width:760px){header{display:block}.badges{justify-content:flex-start;margin-top:14px}.cards{grid-template-columns:1fr}.control-layout{grid-template-columns:1fr}.detail-grid{grid-template-columns:1fr 1fr}.settings{grid-template-columns:1fr}.chart-wrap{height:300px}}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>温湿度控制台</h1><p>STM32 每秒采样 · ESP32 局域网控制与曲线</p></div>
+    <div class="badges"><span id="dataBadge" class="badge warn">等待数据</span><span id="controlBadge" class="badge warn">控制链路等待中</span><span id="wsBadge" class="badge">实时连接中</span></div>
+  </header>
+
+  <section class="cards" aria-label="当前数据">
+    <article class="card aht"><div class="label">当前温度</div><div id="temperatureValue" class="value">--<span class="unit">°C</span></div></article>
+    <article class="card hum"><div class="label">相对湿度</div><div id="humidityValue" class="value">--<span class="unit">%</span></div></article>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><div><h2>PID 参数</h2><p>Kp 0–500，Ki 0–50，Kd 0–1000。</p></div></div>
+    <form id="pidForm" class="control-form">
+      <div class="control-fields">
+        <label class="target">比例 Kp<input id="pidKp" type="number" min="0" max="500" step="0.1" value="160" required></label>
+        <label class="target">积分 Ki<input id="pidKi" type="number" min="0" max="50" step="0.01" value="2" required></label>
+        <label class="target">微分 Kd<input id="pidKd" type="number" min="0" max="1000" step="0.1" value="180" required></label>
+      </div>
+      <div class="control-actions"><button class="secondary" type="submit">应用 PID 参数</button></div>
+      <div id="pidMessage" class="control-message">正在读取 PID 状态…</div>
+    </form>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><div><h2>远程控制</h2></div></div>
+    <div class="control-layout">
+      <form id="controlForm" class="control-form">
+        <div class="control-fields">
+          <label class="check"><input id="temperatureEnabled" type="checkbox" checked>启用温度目标</label>
+          <label class="target">目标温度（30–70°C）<input id="targetTemperature" type="number" min="30" max="70" step="1" value="55" required></label>
+          <label class="check"><input id="humidityEnabled" type="checkbox" checked>启用湿度目标</label>
+          <label class="target">目标湿度（10–80%RH）<input id="targetHumidity" type="number" min="10" max="80" step="1" value="20" required></label>
+          <label class="target">当前室温（−10～50°C）<input id="ambientTemperature" type="number" min="-10" max="50" step="1" value="22" required></label>
+          <label class="check"><input id="persistSettings" type="checkbox">掉电保存本次设定</label>
+        </div>
+        <div class="control-actions">
+          <button id="startButton" class="start" type="button">启动系统</button>
+          <button id="stopButton" class="stop" type="button">停止系统</button>
+          <button class="secondary" type="submit">应用设定</button>
+          <button id="clearFaultButton" class="secondary" type="button">清除故障</button>
+        </div>
+        <div id="controlMessage" class="control-message">正在读取控制状态…</div>
+      </form>
+      <div class="detail-grid">
+        <div class="detail"><span>系统</span><strong id="runningValue">--</strong></div>
+        <div class="detail"><span>控制来源</span><strong id="ownerValue">--</strong></div>
+        <div class="detail"><span>加热器 / 电机</span><strong id="outputsValue">--</strong></div>
+        <div class="detail"><span>输出指令</span><strong id="outputValue">--</strong></div>
+        <div class="detail"><span>实际温度目标</span><strong id="actualTemperatureValue">--</strong></div>
+        <div class="detail"><span>实际湿度目标</span><strong id="actualHumidityValue">--</strong></div>
+        <div class="detail"><span>保温前馈室温</span><strong id="ambientValue">--</strong></div>
+        <div class="detail"><span>风扇</span><strong id="fanValue">--</strong></div>
+        <div class="detail"><span>故障</span><strong id="faultValue">--</strong></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div><h2>实时曲线</h2><div class="legend"><span><i class="dot" style="background:var(--aht)"></i>温度</span><span><i class="dot" style="background:var(--hum)"></i>湿度</span></div></div>
+      <div class="actions"><a class="button" href="/api/history.csv">下载 CSV</a><button id="clearButton" type="button">清空浏览器曲线</button></div>
+    </div>
+    <div class="chart-wrap"><canvas id="chart" aria-label="温湿度历史曲线"></canvas></div>
+  </section>
+
+  <section class="panel">
+    <h2>连接状态</h2>
+    <div class="detail-grid">
+      <div class="detail"><span>网络</span><strong id="networkValue">读取中</strong></div>
+      <div class="detail"><span>地址</span><strong id="ipValue">--</strong></div>
+      <div class="detail"><span>已接收 / 解析错误</span><strong id="frameValue">0 / 0</strong></div>
+      <div class="detail"><span>STM32 运行时间</span><strong id="tickValue">--</strong></div>
+    </div>
+  </section>
+
+  <details class="panel" id="settingsPanel">
+    <summary>网络设置</summary>
+    <form id="settingsForm" class="settings">
+      <label>局域网 Wi-Fi 名称<input id="staSsid" maxlength="32" autocomplete="off"></label>
+      <label>局域网 Wi-Fi 密码<input id="staPassword" type="password" maxlength="63" placeholder="留空表示保持不变" autocomplete="new-password"></label>
+      <label>演示热点名称<input id="apSsid" maxlength="32" required></label>
+      <label>演示热点密码<input id="apPassword" type="password" minlength="8" maxlength="63" placeholder="留空表示保持不变" autocomplete="new-password"></label>
+      <div class="form-actions"><button type="submit">保存并重启</button><span id="formMessage" class="form-message"></span></div>
+    </form>
+    <p class="footnote">ESP32 默认始终开启演示热点，名称为 Temperature-Gateway，地址为 192.168.4.1；配置局域网后仍可同时使用该热点。</p>
+  </details>
+</main>
+<script>
+(() => {
+  'use strict';
+  const MAX_POINTS = 900, STALE_MS = 2500;
+  const samples = [];
+  let lastArrival = 0, socket, reconnectTimer;
+  let controlInitialized = false, controlDirty = false, desiredRunning = false;
+  let pidDirty = false, pendingPid = null;
+  let draftRevision = 0, pendingRequest = null;
+  let latestActual = null;
+  const $ = id => document.getElementById(id);
+  const canvas = $('chart'), ctx = canvas.getContext('2d');
+
+  function number(value, digits = 2) { return Number.isFinite(value) ? value.toFixed(digits) : '--'; }
+  function setValue(id, value, unit) { $(id).innerHTML = `${value}<span class="unit">${unit}</span>`; }
+  function setBadge(id, text, tone) { const node=$(id); node.textContent=text; node.className='badge'+(tone?' '+tone:''); }
+  function setControlMessage(text, tone = '') { const node=$('controlMessage'); node.textContent=text; node.className='control-message'+(tone?' '+tone:''); }
+  function faultText(name) { return ({none:'无',fan:'风扇故障',sensor:'传感器故障',overtemperature:'超温锁定'})[name] || '未知故障'; }
+  function resultText(name) { return ({none:'尚无回执',applied:'命令已应用',bad_range:'设定值超出范围',stale:'命令已过期',fault_active:'存在未清除故障',fan:'风扇未确认运行',sensor:'传感器数据无效',overtemperature:'温度过高',clear_rejected:'当前条件不允许清除故障',lease_expired:'远程控制心跳超时，系统已停止',storage_failed:'设定已应用，但掉电保存失败',persist_requires_stop:'请先停止系统，再执行掉电保存'})[name] || name || '未知状态'; }
+  function toggleTargetInputs() { $('targetTemperature').disabled=!$('temperatureEnabled').checked; $('targetHumidity').disabled=!$('humidityEnabled').checked; }
+  function syncControlInputs(sample) {
+    if (!sample || !sample.extended || controlDirty) return;
+    $('temperatureEnabled').checked=!!sample.temperature_enabled;
+    $('targetTemperature').value=sample.target_temperature_c;
+    $('humidityEnabled').checked=!!sample.humidity_enabled;
+    $('targetHumidity').value=sample.target_humidity_pct;
+    $('ambientTemperature').value=Number.isInteger(sample.ambient_temperature_c)?sample.ambient_temperature_c:22;
+    desiredRunning=!!sample.running; controlInitialized=true; controlDirty=false; toggleTargetInputs();
+  }
+  function setPidMessage(text, tone = '') { const node=$('pidMessage'); node.textContent=text; node.className='control-message'+(tone?' '+tone:''); }
+  function syncPidInputs(status) {
+    const pid=status&&status.control&&status.control.pid;
+    const requested=pid&&pid.requested;
+    if (!requested || pidDirty) return;
+    $('pidKp').value=Number(requested.kp).toFixed(1);
+    $('pidKi').value=Number(requested.ki).toFixed(2);
+    $('pidKd').value=Number(requested.kd).toFixed(1);
+  }
+  function showPidStatus(status) {
+    const pid=status&&status.control&&status.control.pid;
+    if (!pid) { setPidMessage('等待 PID 状态…','warn'); return; }
+    syncPidInputs(status);
+    if (pid.pending) { setPidMessage('PID 参数已发送，等待 STM32 回执…','warn'); return; }
+    if (pid.applied) {
+      setPidMessage('PID 参数已由 STM32 应用。','ok');
+      if (pendingPid && pid.sequence===pendingPid.sequence) { pidDirty=false; pendingPid=null; syncPidInputs(status); }
+      return;
+    }
+    if (pid.result_name && pid.result_name!=='none') { setPidMessage(`PID 参数未应用：${resultText(pid.result_name)}`,'bad'); return; }
+    setPidMessage('可以输入并应用 PID 参数。');
+  }
+  function showActual(sample) {
+    if (!sample || !sample.extended) {
+      ['runningValue','ownerValue','outputsValue','outputValue','actualTemperatureValue','actualHumidityValue','ambientValue','fanValue','faultValue'].forEach(id => $(id).textContent='等待新版状态');
+      setBadge('controlBadge','控制链路等待中','warn'); return;
+    }
+    latestActual=sample;
+    $('runningValue').textContent=sample.running?'运行中':'已停止';
+    $('ownerValue').textContent=sample.remote_owned?'ESP32 远程':'本机';
+    $('outputsValue').textContent=`${sample.heater_on?'加热开':'加热关'} / ${sample.motor_on?'电机开':'电机关'}`;
+    $('outputValue').textContent=`${(sample.output_permille/10).toFixed(1)}%`;
+    $('actualTemperatureValue').textContent=sample.temperature_enabled?`${sample.target_temperature_c}°C`:'关闭';
+    $('actualHumidityValue').textContent=sample.humidity_enabled?`${sample.target_humidity_pct}%RH`:'关闭';
+    $('ambientValue').textContent=`${Number.isInteger(sample.ambient_temperature_c)?sample.ambient_temperature_c:22}°C`;
+    $('fanValue').textContent=!sample.fan_valid?'等待确认':sample.fan_running?'运行':'停止';
+    $('faultValue').textContent=faultText(sample.fault_name);
+    syncControlInputs(sample);
+  }
+  function showSample(sample) {
+    if (sample.valid) { setValue('temperatureValue',number(sample.temperature_c),'°C'); setValue('humidityValue',number(sample.humidity_pct),'%'); }
+    else { setValue('temperatureValue','--','°C'); setValue('humidityValue','--','%'); }
+    $('tickValue').textContent=`${(sample.stm32_tick_ms/1000).toFixed(0)} 秒`;
+    updateDataBadge(sample.valid?'fresh':'invalid'); showActual(sample);
+  }
+  function updateDataBadge(state) {
+    if (state==='fresh') setBadge('dataBadge','数据正常','ok');
+    else if (state==='invalid') setBadge('dataBadge','传感器数据无效','bad');
+    else if (state==='stale') setBadge('dataBadge','数据已中断','warn');
+    else setBadge('dataBadge','等待数据','warn');
+  }
+  function ingest(sample, live = false) {
+    const last=samples[samples.length-1]; if (!last || last.sequence!==sample.sequence) samples.push(sample);
+    while (samples.length>MAX_POINTS) samples.shift(); if (live) lastArrival=Date.now(); showSample(sample); draw();
+  }
+
+  function draw() {
+    const rect=canvas.getBoundingClientRect(), ratio=window.devicePixelRatio||1;
+    const width=Math.max(300,Math.round(rect.width)), height=Math.max(220,Math.round(rect.height));
+    if (canvas.width!==width*ratio || canvas.height!==height*ratio) { canvas.width=width*ratio; canvas.height=height*ratio; }
+    ctx.setTransform(ratio,0,0,ratio,0,0); ctx.clearRect(0,0,width,height);
+    const margin={left:48,right:48,top:18,bottom:32}, plotW=width-margin.left-margin.right, plotH=height-margin.top-margin.bottom;
+    const valid=samples.filter(s=>s.valid); let temps=valid.map(s=>s.temperature_c).filter(Number.isFinite);
+    let tMin=temps.length?Math.min(...temps):15, tMax=temps.length?Math.max(...temps):35;
+    if (tMax-tMin<4) { const mid=(tMax+tMin)/2; tMin=mid-2; tMax=mid+2; }
+    const pad=Math.max(1,(tMax-tMin)*.12); tMin-=pad; tMax+=pad; ctx.font='12px system-ui'; ctx.lineWidth=1;
+    for (let i=0;i<=5;i++) { const y=margin.top+plotH*i/5; ctx.strokeStyle='#263a50'; ctx.beginPath(); ctx.moveTo(margin.left,y); ctx.lineTo(width-margin.right,y); ctx.stroke(); ctx.fillStyle='#92a7bd'; ctx.textAlign='right'; ctx.fillText((tMax-(tMax-tMin)*i/5).toFixed(1)+'°',margin.left-7,y+4); ctx.textAlign='left'; ctx.fillText((100-i*20)+'%',width-margin.right+7,y+4); }
+    const x=i=>margin.left+(samples.length<2?plotW:plotW*i/(samples.length-1)), yTemp=v=>margin.top+(tMax-v)*plotH/(tMax-tMin), yHum=v=>margin.top+(100-v)*plotH/100;
+    function line(key,color,yFn) { ctx.strokeStyle=color; ctx.lineWidth=2; ctx.beginPath(); let drawing=false; samples.forEach((s,i)=>{ const v=s.valid?s[key]:null; if (!Number.isFinite(v)) { drawing=false; return; } const px=x(i),py=yFn(v); if (!drawing) { ctx.moveTo(px,py); drawing=true; } else ctx.lineTo(px,py); }); ctx.stroke(); }
+    line('temperature_c','#22d3a6',yTemp); line('humidity_pct','#f9c74f',yHum); ctx.fillStyle='#92a7bd'; ctx.textAlign='left';
+    if (samples.length) { const span=Math.max(0,(samples[samples.length-1].stm32_tick_ms-samples[0].stm32_tick_ms)/1000); ctx.fillText(`最近 ${span.toFixed(0)} 秒 · ${samples.length} 点`,margin.left,height-8); }
+    else ctx.fillText('尚无历史数据',margin.left,height-8);
+  }
+
+  function integerField(id,min,max,fallback,strict) { const value=Number($(id).value); if (Number.isInteger(value)&&value>=min&&value<=max) return value; if (!strict&&Number.isInteger(fallback)) return fallback; throw new Error(`${min}–${max} 范围内的整数不能为空`); }
+  function controlBody(running, clearFault, strict) {
+    const tempFallback=latestActual&&latestActual.extended?latestActual.target_temperature_c:55;
+    const humFallback=latestActual&&latestActual.extended?latestActual.target_humidity_pct:20;
+    const ambientFallback=latestActual&&latestActual.extended&&Number.isInteger(latestActual.ambient_temperature_c)?latestActual.ambient_temperature_c:22;
+    const preserveActual=clearFault&&latestActual&&latestActual.extended;
+    return {running,temperature_enabled:preserveActual?latestActual.temperature_enabled:$('temperatureEnabled').checked,target_temperature_c:preserveActual?tempFallback:integerField('targetTemperature',30,70,tempFallback,strict),humidity_enabled:preserveActual?latestActual.humidity_enabled:$('humidityEnabled').checked,target_humidity_pct:preserveActual?humFallback:integerField('targetHumidity',10,80,humFallback,strict),ambient_temperature_c:preserveActual?ambientFallback:integerField('ambientTemperature',-10,50,ambientFallback,strict),clear_fault:!!clearFault,persist:clearFault?false:$('persistSettings').checked};
+  }
+  async function submitControl(running, clearFault = false, strict = true) {
+    desiredRunning=running; setControlMessage('命令发送中…','warn');
+    try {
+      const response=await fetch('/api/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(controlBody(running,clearFault,strict))});
+      const text=await response.text(); let payload={}; try { payload=JSON.parse(text); } catch (_) {}
+      if (!response.ok) throw new Error(payload.error||text||`HTTP ${response.status}`);
+      pendingRequest={sequence:payload.sequence,revision:draftRevision};
+      controlDirty=true; setControlMessage(`命令 #${payload.sequence} 已发送，等待 STM32 回执…`,'warn'); await loadStatus();
+    } catch (error) { setControlMessage('控制失败：'+error.message,'bad'); }
+  }
+  function pidNumber(id,min,max,step) {
+    const value=Number($(id).value);
+    if (Number.isFinite(value) && value>=min && value<=max &&
+        Math.abs(value/step-Math.round(value/step))<1e-6) return value;
+    throw new Error(`${min}–${max} 范围内的 PID 参数格式不正确`);
+  }
+  async function submitPid() {
+    setPidMessage('PID 参数发送中…','warn');
+    try {
+      const body={kp:pidNumber('pidKp',0,500,0.1),ki:pidNumber('pidKi',0,50,0.01),kd:pidNumber('pidKd',0,1000,0.1)};
+      const response=await fetch('/api/pid',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const text=await response.text(); let payload={}; try { payload=JSON.parse(text); } catch (_) {}
+      if (!response.ok) throw new Error(payload.error||text||`HTTP ${response.status}`);
+      pendingPid={sequence:payload.sequence}; pidDirty=true;
+      setPidMessage(`PID 命令 #${payload.sequence} 已发送，等待 STM32 回执…`,'warn'); await loadStatus();
+    } catch (error) { setPidMessage('PID 设置失败：'+error.message,'bad'); }
+  }
+  function controlMatches(control, actual) {
+    const r=control&&control.requested; return !!(r&&actual&&actual.extended&&r.running===actual.running&&r.temperature_enabled===actual.temperature_enabled&&r.target_temperature_c===actual.target_temperature_c&&r.humidity_enabled===actual.humidity_enabled&&r.target_humidity_pct===actual.target_humidity_pct&&r.ambient_temperature_c===actual.ambient_temperature_c);
+  }
+  function controlDraftMatches(control, actual) {
+    const request=control&&control.requested;
+    const submitted=!!(pendingRequest&&request&&control.sequence===pendingRequest.sequence&&draftRevision===pendingRequest.revision);
+    return controlMatches(control,actual)&&(!controlDirty||submitted);
+  }
+  function showControlStatus(control, actual) {
+    if (!control || !control.link || !control.link.extended) { setBadge('controlBadge','控制链路等待中','warn'); return; }
+    if (control.has_request && control.requested) desiredRunning=!!control.requested.running;
+    if (!control.link.fresh) { setBadge('controlBadge','STM32 状态已中断','bad'); setControlMessage('没有收到新的 STM32 状态，当前禁止远程启动。','bad'); return; }
+    if (control.pending) { setBadge('controlBadge','命令待确认','warn'); setControlMessage('命令已通过半双工 SPI 发送，等待 STM32 回传确认…','warn'); return; }
+    if (control.applied) {
+      const matches=controlDraftMatches(control,actual);
+      setBadge('controlBadge',matches?'控制已应用':'状态已被本机或保护逻辑改变',matches?'ok':'warn');
+      setControlMessage(matches?'设定和运行状态已由 STM32 确认。':'命令曾成功应用，但当前实际状态已发生变化。',matches?'ok':'warn');
+      if (matches) { controlDirty=false; syncControlInputs(actual); if (pendingRequest&&control.sequence===pendingRequest.sequence) pendingRequest=null; }
+      return;
+    }
+    if (control.has_request && control.result_name!=='none') { setBadge('controlBadge','命令未应用','bad'); setControlMessage(resultText(control.result_name),'bad'); }
+    else { setBadge('controlBadge','控制链路正常','ok'); setControlMessage('可以设置参数或启动系统。'); }
+  }
+  async function loadHistory() { try { const response=await fetch('/api/history?limit='+MAX_POINTS,{cache:'no-store'}); if (!response.ok) throw new Error(); const rows=await response.json(); samples.length=0; rows.slice(-MAX_POINTS).forEach(s=>samples.push(s)); if (samples.length) showSample(samples[samples.length-1]); draw(); } catch (_) { draw(); } }
+  async function loadStatus() {
+    try {
+      const response=await fetch('/api/status',{cache:'no-store'}); if (!response.ok) throw new Error(); const status=await response.json(), wifi=status.wifi;
+      const networkNames=[]; if (wifi.ap_active) networkNames.push(`演示热点 ${wifi.ap_ssid}`); if (wifi.sta_connected) networkNames.push(`局域网 ${wifi.sta_ssid} (${wifi.rssi} dBm)`); $('networkValue').textContent=networkNames.join(' + ')||'正在连接'; const addresses=[]; if (wifi.ap_ip) addresses.push(`热点 ${wifi.ap_ip}`); if (wifi.sta_ip) addresses.push(`局域网 ${wifi.sta_ip}`); $('ipValue').textContent=addresses.join(' / ')||'--'; $('frameValue').textContent=`${status.stats.accepted_frames} / ${status.stats.parse_errors}`;
+      if (status.data.present) { lastArrival=Date.now()-status.data.age_ms; if (!samples.length) ingest(status.data,false); else showSample(status.data); } else updateDataBadge('waiting');
+      showControlStatus(status.control,status.data.present?status.data:null);
+      showPidStatus(status);
+    } catch (_) { $('networkValue').textContent='状态读取失败'; setBadge('controlBadge','控制状态读取失败','bad'); }
+  }
+  function connectWebSocket() {
+    clearTimeout(reconnectTimer); socket=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws`);
+    socket.onopen=()=>{ setBadge('wsBadge','实时连接正常','ok'); loadHistory(); };
+    socket.onmessage=event=>{ try { const message=JSON.parse(event.data); if (message.type==='sample') ingest(message,true); } catch (_) {} };
+    socket.onclose=()=>{ setBadge('wsBadge','实时连接重试中','warn'); reconnectTimer=setTimeout(connectWebSocket,2000); }; socket.onerror=()=>socket.close();
+  }
+  async function loadSettings() { try { const settings=await (await fetch('/api/settings',{cache:'no-store'})).json(); $('staSsid').value=settings.sta_ssid||''; $('apSsid').value=settings.ap_ssid||''; } catch (_) { $('formMessage').textContent='无法读取设置'; } }
+
+  ['temperatureEnabled','targetTemperature','humidityEnabled','targetHumidity','ambientTemperature','persistSettings'].forEach(id=>$(id).addEventListener('input',()=>{ draftRevision++; controlDirty=true; toggleTargetInputs(); }));
+  ['pidKp','pidKi','pidKd'].forEach(id=>$(id).addEventListener('input',()=>{ pidDirty=true; }));
+  $('controlForm').addEventListener('submit',event=>{ event.preventDefault(); submitControl(desiredRunning,false,true); });
+  $('pidForm').addEventListener('submit',event=>{ event.preventDefault(); submitPid(); });
+  $('startButton').addEventListener('click',()=>submitControl(true,false,true));
+  $('stopButton').addEventListener('click',()=>submitControl(false,false,false));
+  $('clearFaultButton').addEventListener('click',()=>submitControl(false,true,false));
+  $('settingsForm').addEventListener('submit',async event=>{ event.preventDefault(); const message=$('formMessage'); message.textContent='正在保存…'; const body={sta_ssid:$('staSsid').value.trim(),ap_ssid:$('apSsid').value.trim()}; if ($('staPassword').value) body.sta_password=$('staPassword').value; if ($('apPassword').value) body.ap_password=$('apPassword').value; try { const response=await fetch('/api/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); if (!response.ok) throw new Error(await response.text()); message.textContent='保存成功，设备正在重启…'; } catch (error) { message.textContent='保存失败：'+error.message; } });
+  $('clearButton').addEventListener('click',()=>{ samples.length=0; draw(); }); if (location.pathname==='/settings') $('settingsPanel').open=true;
+  toggleTargetInputs(); setInterval(()=>{ if (lastArrival&&Date.now()-lastArrival>STALE_MS) updateDataBadge('stale'); },500); setInterval(loadStatus,1500); new ResizeObserver(draw).observe(canvas);
+  Promise.all([loadHistory(),loadStatus(),loadSettings()]).finally(connectWebSocket);
+})();
+</script>
+</body>
+</html>

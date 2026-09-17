@@ -5,10 +5,21 @@
 #include "driver_oled.h"
 #include "gpio.h"
 #include "i2c.h"
+#include "remote_control.h"
 #include "settings_storage.h"
+#include "separation_pid.h"
 #include "spi.h"
+#include "telemetry.h"
+#include "temperature_fusion.h"
 
 #include <cstring>
+
+extern "C" {
+volatile float g_pidKp = 200.0f;
+volatile float g_pidKi = 2.0f;
+volatile float g_pidKd = 180.0f;
+volatile float g_pidSeparation = 2.0f;
+}
 
 namespace
 {
@@ -19,6 +30,9 @@ constexpr uint32_t kSensorPeriodMs = 1000U;
 constexpr uint32_t kSensorReconnectPeriodMs = 2000U;
 constexpr uint32_t kAht20ConversionMs = 85U;
 constexpr uint32_t kDisplayPeriodMs = 1000U;
+constexpr uint32_t kRemoteLeaseMs = 5000U;
+constexpr uint32_t kRemoteRunStartupGuardMs = 5000U;
+constexpr uint8_t kMaximumRemoteCommandsPerLoop = 4U;
 constexpr uint32_t kFanRunConfirmMs = 200U;
 constexpr uint32_t kFanStopConfirmMs = 500U;
 constexpr uint32_t kFanStartupGraceMs = 6000U;
@@ -40,17 +54,33 @@ constexpr uint32_t kPwmTimerClockHz = 72000000U;
 constexpr uint32_t kPwmCounterClockHz = 10000U;
 constexpr uint32_t kPwmFrequencyHz = 10U;
 constexpr bool kXyMosActiveHigh = true;
+constexpr uint32_t kHeaterLedFastPeriodMs = 160U;
+constexpr uint32_t kHeaterLedSlowPeriodMs = 4000U;
+constexpr uint32_t kMotorPwmFrequencyHz = 20000U;
+constexpr uint32_t kMotorPwmPeriodCounts =
+    kPwmTimerClockHz / kMotorPwmFrequencyHz;
+constexpr uint32_t kMotorDutyPercent = 100U;
+static_assert(kMotorDutyPercent <= 100U, "Motor duty must be 0..100 percent");
 volatile int8_t g_encoderTransitionAccumulator = 0;
 volatile int16_t g_encoderPendingSteps = 0;
 volatile uint8_t g_encoderPreviousState = 3U;
 bool g_displayCacheValid = false;
 char g_displayCache[4][17] = {};
+constexpr uint8_t kEmptyRectangleGlyph[16] = {
+    0xE0U, 0x20U, 0x20U, 0x20U, 0x20U, 0x20U, 0xE0U, 0x00U,
+    0x07U, 0x04U, 0x04U, 0x04U, 0x04U, 0x04U, 0x07U, 0x00U,
+};
+constexpr uint8_t kSolidRectangleGlyph[16] = {
+    0xE0U, 0xE0U, 0xE0U, 0xE0U, 0xE0U, 0xE0U, 0xE0U, 0x00U,
+    0x07U, 0x07U, 0x07U, 0x07U, 0x07U, 0x07U, 0x07U, 0x00U,
+};
 
 enum class UiPage : uint8_t
 {
   Dashboard,
   SetTemperature,
   SetHumidity,
+  SetAmbient,
   StartConfirm,
 };
 
@@ -69,16 +99,35 @@ enum class FaultCode : uint8_t
   Overtemperature,
 };
 
+enum class RemoteResult : uint8_t
+{
+  None = 0,
+  Applied = 1,
+  BadRange = 2,
+  Stale = 3,
+  FaultActive = 4,
+  Fan = 5,
+  Sensor = 6,
+  Overtemperature = 7,
+  ClearRejected = 8,
+  LeaseExpired = 9,
+  StorageFailed = 10,
+  PersistRequiresStop = 11,
+};
+
 struct Settings
 {
   uint8_t targetTemperatureC = kDefaultTargetTemperatureC;
   uint8_t targetHumidityPercent = kDefaultTargetHumidityPercent;
   bool temperatureEnabled = true;
   bool humidityEnabled = true;
+  int8_t ambientTemperatureC = AMBIENT_TEMPERATURE_DEFAULT_C;
 };
 
 struct SensorData
 {
+  uint32_t sampleTickMs = 0U;
+  int32_t temperatureCentiC = 0;
   int32_t ahtTemperatureCentiC = 0;
   int32_t bmpTemperatureCentiC = 0;
   uint32_t humidityMilliPercent = 0U;
@@ -97,10 +146,27 @@ struct RuntimeState
 {
   bool running = false;
   bool heaterOn = false;
+  uint16_t heaterPermille = 0;
+  SeparationPid pid;
+  uint32_t pidTick = 0;
+  int32_t pidTarget = 0;
+  bool motorOn = false;
   bool dryingNeeded = true;
+  bool remoteOwned = false;
   FaultCode fault = FaultCode::None;
   uint32_t runStartTick = 0U;
   uint32_t elapsedSeconds = 0U;
+};
+
+struct RemoteState
+{
+  bool hasCommand = false;
+  RemoteControlCommand lastCommand{};
+  RemoteResult lastCommandResult = RemoteResult::None;
+  uint32_t ackSession = 0U;
+  uint32_t ackSequence = 0U;
+  RemoteResult ackResult = RemoteResult::None;
+  uint32_t lastHeartbeatTick = 0U;
 };
 
 struct ButtonState
@@ -277,19 +343,99 @@ void InitHeaterPwm()
   TIM4->CR1 = TIM_CR1_ARPE | TIM_CR1_CEN;
 }
 
+void InitMotorPwm()
+{
+  RCC->APB1ENR |= RCC_APB1ENR_TIM2EN;
+  TIM2->CR1 = 0U;
+  TIM2->CCER = 0U;
+  TIM2->PSC = 0U;
+  TIM2->ARR = kMotorPwmPeriodCounts - 1U;
+  TIM2->CCR1 = 0U;
+  TIM2->CCMR1 = (6U << TIM_CCMR1_OC1M_Pos) | TIM_CCMR1_OC1PE;
+  TIM2->EGR = TIM_EGR_UG;
+  TIM2->CCER = TIM_CCER_CC1E;
+  TIM2->CR1 = TIM_CR1_ARPE | TIM_CR1_CEN;
+}
+
+bool SetHeaterDuty(RuntimeState &runtime, uint16_t duty)
+{
+  if (duty > 1000U) duty = 1000U;
+  if (runtime.heaterPermille == duty) return false;
+  runtime.heaterPermille = duty;
+  runtime.heaterOn = duty != 0;
+  // Preloaded CCR takes effect at the next 10 Hz period, without restarting it.
+  TIM4->CCR3 = ((TIM4->ARR + 1U) * duty) / 1000U;
+  if (duty == 0U) TIM4->EGR = TIM_EGR_UG; // Immediate safety shutdown.
+  if (duty == 0U)
+  {
+    /* PC13 is active low; turn the indicator off immediately on shutdown. */
+    HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
+  }
+  return true;
+}
+
+void UpdateHeaterIndicator(const RuntimeState &runtime, uint32_t now)
+{
+  if (runtime.heaterPermille == 0U)
+  {
+    HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_SET);
+    return;
+  }
+
+  const uint32_t periodRange =
+      kHeaterLedSlowPeriodMs - kHeaterLedFastPeriodMs;
+  const uint32_t period =
+      kHeaterLedSlowPeriodMs -
+      (periodRange * runtime.heaterPermille) / 1000U;
+  const bool ledOn = (now % period) < (period / 2U);
+  /* PC13 is active low, so the first half of each period is lit. */
+  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin,
+                   ledOn ? GPIO_PIN_RESET : GPIO_PIN_SET);
+}
+
 bool SetHeaterOutput(RuntimeState &runtime, bool enabled)
 {
-  if (runtime.heaterOn == enabled)
+  if (!enabled) runtime.pid.reset();
+  return SetHeaterDuty(runtime, enabled ? 1000U : 0U);
+}
+
+bool SetMotorOutput(RuntimeState &runtime, bool enabled)
+{
+  if (runtime.motorOn == enabled)
   {
     return false;
   }
 
-  runtime.heaterOn = enabled;
-  TIM4->CCR3 = enabled ? TIM4->ARR + 1U : 0U;
-  TIM4->EGR = TIM_EGR_UG;
-  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin,
-                    enabled ? GPIO_PIN_RESET : GPIO_PIN_SET);
+  if (enabled)
+  {
+    HAL_GPIO_WritePin(MOTOR_IN2_GPIO_Port, MOTOR_IN2_Pin, GPIO_PIN_RESET);
+    TIM2->CCR1 =
+        (kMotorPwmPeriodCounts * kMotorDutyPercent) / 100U;
+  }
+  else
+  {
+    TIM2->CCR1 = 0U;
+    HAL_GPIO_WritePin(MOTOR_IN2_GPIO_Port, MOTOR_IN2_Pin, GPIO_PIN_RESET);
+  }
+  TIM2->EGR = TIM_EGR_UG;
+  runtime.motorOn = enabled;
   return true;
+}
+
+bool SetDryingOutputs(RuntimeState &runtime, bool enabled)
+{
+  bool changed = false;
+  if (enabled)
+  {
+    changed = SetMotorOutput(runtime, true) || changed;
+    changed = SetHeaterOutput(runtime, true) || changed;
+  }
+  else
+  {
+    changed = SetHeaterOutput(runtime, false) || changed;
+    changed = SetMotorOutput(runtime, false) || changed;
+  }
+  return changed;
 }
 
 void UpdateElapsedTime(RuntimeState &runtime, uint32_t now)
@@ -303,16 +449,17 @@ void UpdateElapsedTime(RuntimeState &runtime, uint32_t now)
 bool StopRun(RuntimeState &runtime, uint32_t now)
 {
   UpdateElapsedTime(runtime, now);
-  const bool changed = runtime.running || runtime.heaterOn;
+  const bool changed = runtime.running || runtime.heaterOn || runtime.motorOn;
   runtime.running = false;
-  SetHeaterOutput(runtime, false);
+  runtime.remoteOwned = false;
+  SetDryingOutputs(runtime, false);
   return changed;
 }
 
 bool LatchFault(RuntimeState &runtime, FaultCode fault, uint32_t now)
 {
   const bool changed = runtime.fault != fault || runtime.running ||
-                       runtime.heaterOn;
+                       runtime.heaterOn || runtime.motorOn;
   StopRun(runtime, now);
   runtime.fault = fault;
   return changed;
@@ -367,7 +514,7 @@ bool WorkAppearsNeeded(const Settings &settings, const SensorData &sensor)
         static_cast<uint32_t>(settings.targetHumidityPercent) * 1000U;
     return sensor.humidityMilliPercent > target;
   }
-  return MaximumTemperature(sensor) <
+  return sensor.temperatureCentiC <
          static_cast<int32_t>(settings.targetTemperatureC) * 100;
 }
 
@@ -397,8 +544,10 @@ bool StartRun(RuntimeState &runtime, const Settings &settings,
     }
   }
 
+  /* Always reconcile the physical PWM outputs before beginning a new run. */
+  SetDryingOutputs(runtime, false);
   runtime.running = true;
-  runtime.heaterOn = false;
+  runtime.remoteOwned = false;
   runtime.dryingNeeded =
       settings.humidityEnabled
           ? sensor.humidityMilliPercent >
@@ -436,6 +585,271 @@ bool CanClearFault(const RuntimeState &runtime, const Settings &settings,
 
 bool UpdateControl(RuntimeState &runtime, const Settings &settings,
                    const SensorData &sensor, const FanState &fan,
+                   uint32_t now);
+
+bool SameRemoteCommand(const RemoteControlCommand &left,
+                       const RemoteControlCommand &right)
+{
+  return left.session == right.session &&
+         left.sequence == right.sequence &&
+         left.seen_tick_ms == right.seen_tick_ms &&
+         left.run == right.run &&
+         left.temperature_enabled == right.temperature_enabled &&
+         left.target_temperature_c == right.target_temperature_c &&
+         left.humidity_enabled == right.humidity_enabled &&
+         left.target_humidity_percent == right.target_humidity_percent &&
+         left.ambient_temperature_c == right.ambient_temperature_c &&
+         left.clear_fault == right.clear_fault &&
+         left.persist == right.persist &&
+         left.pid_update == right.pid_update &&
+         left.pid_kp_tenths == right.pid_kp_tenths &&
+         left.pid_ki_hundredths == right.pid_ki_hundredths &&
+         left.pid_kd_tenths == right.pid_kd_tenths &&
+         left.values_in_range == right.values_in_range;
+}
+
+RemoteResult ApplyRemotePidCommand(const RemoteControlCommand &command,
+                                   RuntimeState &runtime,
+                                   RemoteState &remote)
+{
+  if (!command.values_in_range)
+  {
+    return RemoteResult::BadRange;
+  }
+  g_pidKp = command.pid_kp_tenths / 10.0f;
+  g_pidKi = command.pid_ki_hundredths / 100.0f;
+  g_pidKd = command.pid_kd_tenths / 10.0f;
+  runtime.pid.reset();
+  return RemoteResult::Applied;
+}
+
+RemoteResult MapStartFailure(FaultCode fault)
+{
+  if (fault == FaultCode::Fan)
+  {
+    return RemoteResult::Fan;
+  }
+  if (fault == FaultCode::Sensor)
+  {
+    return RemoteResult::Sensor;
+  }
+  if (fault == FaultCode::Overtemperature)
+  {
+    return RemoteResult::Overtemperature;
+  }
+  return RemoteResult::FaultActive;
+}
+
+RemoteResult ApplyRemoteCommand(const RemoteControlCommand &command,
+                                Settings &settings,
+                                RuntimeState &runtime,
+                                const SensorData &sensor,
+                                const FanState &fan,
+                                bool settingsStorageReady,
+                                RemoteState &remote,
+                                uint32_t now,
+                                uint32_t remoteRunAllowedTick)
+{
+  if (command.pid_update)
+  {
+    RemoteResult result = RemoteResult::None;
+    if (remote.hasCommand &&
+        command.session == remote.lastCommand.session &&
+        command.sequence == remote.lastCommand.sequence)
+    {
+      if (!SameRemoteCommand(command, remote.lastCommand))
+      {
+        result = RemoteResult::Stale;
+      }
+      else
+      {
+        result = remote.lastCommandResult;
+      }
+    }
+    else
+    {
+      result = ApplyRemotePidCommand(command, runtime, remote);
+    }
+    remote.hasCommand = true;
+    remote.lastCommand = command;
+    remote.lastCommandResult = result;
+    remote.ackSession = command.session;
+    remote.ackSequence = command.sequence;
+    remote.ackResult = result;
+    return result;
+  }
+  if (remote.hasCommand &&
+      command.session == remote.lastCommand.session &&
+      command.sequence == remote.lastCommand.sequence)
+  {
+    /* Repeated transport frames acknowledge the original result. They never
+       repeat a flash write or control transition. A byte-for-byte equivalent
+       accepted RUN frame also proves that the remote controller is alive. */
+    if (!SameRemoteCommand(command, remote.lastCommand))
+    {
+      remote.ackSession = command.session;
+      remote.ackSequence = command.sequence;
+      remote.ackResult = RemoteResult::Stale;
+      return RemoteResult::Stale;
+    }
+    if (command.run &&
+        (remote.lastCommandResult == RemoteResult::Applied ||
+         remote.lastCommandResult == RemoteResult::StorageFailed) &&
+        runtime.running && runtime.remoteOwned)
+    {
+      remote.lastHeartbeatTick = now;
+    }
+    remote.ackSession = command.session;
+    remote.ackSequence = command.sequence;
+    remote.ackResult = remote.lastCommandResult;
+    return remote.lastCommandResult;
+  }
+
+  if (remote.hasCommand &&
+      command.session == remote.lastCommand.session &&
+      static_cast<int32_t>(command.sequence -
+                           remote.lastCommand.sequence) < 0)
+  {
+    /* An older command may be reported, but it cannot replace the cached
+       command/result or roll the controller state back. */
+    remote.ackSession = command.session;
+    remote.ackSequence = command.sequence;
+    remote.ackResult = RemoteResult::Stale;
+    return RemoteResult::Stale;
+  }
+
+  RemoteResult result = RemoteResult::Applied;
+  if (!command.values_in_range)
+  {
+    result = RemoteResult::BadRange;
+  }
+  else if (command.run && !TimeReached(now, remoteRunAllowedTick))
+  {
+    /* Consume and acknowledge a RUN received during startup as stale. Its
+       sequence therefore cannot start the machine later when the guard
+       expires; the controller must issue a fresh RUN command. STOP/settings
+       commands remain available throughout the guard interval. */
+    result = RemoteResult::Stale;
+  }
+  else if (command.run && command.persist)
+  {
+    /* Flash erase/program can block the safety loop for seconds. Require a
+       separate stopped-state save before a remote start. */
+    result = RemoteResult::PersistRequiresStop;
+  }
+  else if (command.run && now - command.seen_tick_ms > kRemoteLeaseMs)
+  {
+    result = RemoteResult::Stale;
+  }
+  else
+  {
+    settings.targetTemperatureC = command.target_temperature_c;
+    settings.temperatureEnabled = command.temperature_enabled;
+    settings.targetHumidityPercent = command.target_humidity_percent;
+    settings.humidityEnabled = command.humidity_enabled;
+    settings.ambientTemperatureC = command.ambient_temperature_c;
+
+    if (!command.run)
+    {
+      StopRun(runtime, now);
+    }
+
+    if (command.clear_fault && runtime.fault != FaultCode::None)
+    {
+      if (CanClearFault(runtime, settings, sensor, fan))
+      {
+        runtime.fault = FaultCode::None;
+      }
+      else
+      {
+        result = RemoteResult::ClearRejected;
+      }
+    }
+
+    if (result == RemoteResult::Applied && command.run)
+    {
+      if (runtime.fault != FaultCode::None)
+      {
+        result = RemoteResult::FaultActive;
+      }
+      else if (!runtime.running &&
+               !StartRun(runtime, settings, sensor, fan, now))
+      {
+        result = MapStartFailure(runtime.fault);
+      }
+
+      if (result == RemoteResult::Applied)
+      {
+        runtime.remoteOwned = true;
+        remote.lastHeartbeatTick = now;
+      }
+    }
+
+    /* Apply a lowered/disabled target before a requested flash write can
+       block the main loop. All normal safety gates remain in UpdateControl. */
+    UpdateControl(runtime, settings, sensor, fan, now);
+
+    if (command.persist)
+    {
+      const StoredSettings settingsToStore{
+          settings.targetTemperatureC,
+          settings.targetHumidityPercent,
+          settings.temperatureEnabled,
+          settings.humidityEnabled,
+          settings.ambientTemperatureC,
+      };
+      if ((!settingsStorageReady ||
+           !SettingsStorage_Save(&settingsToStore)) &&
+          result == RemoteResult::Applied)
+      {
+        result = RemoteResult::StorageFailed;
+      }
+    }
+  }
+
+  remote.hasCommand = true;
+  remote.lastCommand = command;
+  remote.lastCommandResult = result;
+  remote.ackSession = command.session;
+  remote.ackSequence = command.sequence;
+  remote.ackResult = result;
+  return result;
+}
+
+uint8_t BuildRemoteStateBits(const Settings &settings,
+                             const RuntimeState &runtime,
+                             const FanState &fan)
+{
+  return static_cast<uint8_t>(
+      (runtime.running ? 1U << 0U : 0U) |
+      (runtime.heaterOn ? 1U << 1U : 0U) |
+      (runtime.motorOn ? 1U << 2U : 0U) |
+      (settings.temperatureEnabled ? 1U << 3U : 0U) |
+      (settings.humidityEnabled ? 1U << 4U : 0U) |
+      (fan.running ? 1U << 5U : 0U) |
+      (fan.sampleValid ? 1U << 6U : 0U) |
+      (runtime.remoteOwned ? 1U << 7U : 0U));
+}
+
+bool SendTelemetrySnapshot(uint32_t tick, const SensorData &sensor,
+                           const Settings &settings,
+                           const RuntimeState &runtime, const FanState &fan,
+                           const RemoteState &remote)
+{
+  return Telemetry_Send(
+      tick, sensor.temperatureCentiC,
+      sensor.humidityMilliPercent, sensor.valid,
+      BuildRemoteStateBits(settings, runtime, fan),
+      runtime.heaterPermille, settings.targetTemperatureC,
+      settings.targetHumidityPercent, static_cast<uint8_t>(runtime.fault),
+      settings.ambientTemperatureC,
+      remote.ackSession, remote.ackSequence,
+      static_cast<uint8_t>(remote.ackResult),
+      RemoteControl_GetRxErrorCount());
+}
+
+bool UpdateControl(RuntimeState &runtime, const Settings &settings,
+                   const SensorData &sensor, const FanState &fan,
                    uint32_t now)
 {
   bool changed = false;
@@ -443,13 +857,13 @@ bool UpdateControl(RuntimeState &runtime, const Settings &settings,
 
   if (!runtime.running || runtime.fault != FaultCode::None)
   {
-    return SetHeaterOutput(runtime, false);
+    return SetDryingOutputs(runtime, false) || changed;
   }
 
   const uint32_t runTimeMs = now - runtime.runStartTick;
   if (runTimeMs < kFanStartupGraceMs)
   {
-    return SetHeaterOutput(runtime, false);
+    return SetDryingOutputs(runtime, false) || changed;
   }
 
   if (!fan.sampleValid || !fan.running)
@@ -460,7 +874,7 @@ bool UpdateControl(RuntimeState &runtime, const Settings &settings,
   if (!HeatingConfigured(settings))
   {
     runtime.dryingNeeded = false;
-    return SetHeaterOutput(runtime, false);
+    return SetDryingOutputs(runtime, false) || changed;
   }
 
   if (!sensor.valid)
@@ -496,24 +910,33 @@ bool UpdateControl(RuntimeState &runtime, const Settings &settings,
 
   if (!runtime.dryingNeeded)
   {
-    return SetHeaterOutput(runtime, false) || changed;
+    return SetDryingOutputs(runtime, false) || changed;
   }
 
   const int32_t targetTemperature =
       settings.temperatureEnabled
           ? static_cast<int32_t>(settings.targetTemperatureC) * 100
           : kNoTargetSafetyLimitCentiC;
-  const int32_t controlTemperature = MaximumTemperature(sensor);
-  if (runtime.heaterOn && controlTemperature >= targetTemperature)
+  const int32_t controlTemperature = sensor.temperatureCentiC;
+  const bool targetChanged = runtime.pidTarget != targetTemperature;
+  if (targetChanged)
   {
-    changed = SetHeaterOutput(runtime, false) || changed;
+    runtime.pidTarget = targetTemperature;
   }
-  else if (!runtime.heaterOn &&
-           controlTemperature <=
-               targetTemperature - kTemperatureHysteresisCentiC)
+  const bool newSample = runtime.pidTick != sensor.sampleTickMs;
+  if (!runtime.pid.ready || targetChanged || newSample)
   {
-    changed = SetHeaterOutput(runtime, true) || changed;
+    // Follow the actual sensor cadence, never differentiate a repeated sample.
+    const uint32_t pidElapsed = sensor.sampleTickMs - runtime.pidTick;
+    const float dt = runtime.pid.ready ? (newSample ? pidElapsed / 1000.0f : 0.0f) : 1.0f;
+    runtime.pidTick = sensor.sampleTickMs;
+    const float duty = runtime.pid.step(targetTemperature / 100.0f,
+        controlTemperature / 100.0f, dt, g_pidKp, g_pidKi, g_pidKd,
+        g_pidSeparation, settings.ambientTemperatureC);
+    changed = SetHeaterDuty(runtime, static_cast<uint16_t>(duty + 0.5f)) || changed;
   }
+  // Keep circulation running throughout regulation, including zero heat demand.
+  changed = SetMotorOutput(runtime, true) || changed;
   return changed;
 }
 
@@ -595,6 +1018,18 @@ void PutTemperature(char line[17], uint8_t position, int32_t centiC)
   line[position + 4U] = static_cast<char>('0' + magnitude % 10U);
 }
 
+void PutDutyBar(char line[17], uint16_t dutyPermille)
+{
+  constexpr uint8_t kDutyBarWidth = 16U;
+  const uint8_t filled = static_cast<uint8_t>(
+      (static_cast<uint32_t>(dutyPermille) * kDutyBarWidth + 500U) / 1000U);
+
+  for (uint8_t index = 0U; index < kDutyBarWidth; ++index)
+  {
+    line[index] = index < filled ? '#' : '.';
+  }
+}
+
 void RenderDashboard(char lines[4][17], const Settings &settings,
                      const SensorData &sensor, const FanState &fan,
                      const RuntimeState &runtime, uint32_t now)
@@ -602,7 +1037,7 @@ void RenderDashboard(char lines[4][17], const Settings &settings,
   if (sensor.valid)
   {
     PutText(lines[0], 0U, "T:");
-    PutTemperature(lines[0], 2U, sensor.ahtTemperatureCentiC);
+    PutTemperature(lines[0], 2U, sensor.temperatureCentiC);
     lines[0][7] = 'C';
     PutText(lines[0], 9U, "H:");
     PutUnsigned(lines[0], 11U,
@@ -614,15 +1049,7 @@ void RenderDashboard(char lines[4][17], const Settings &settings,
     PutText(lines[0], 0U, "T: --.-C H: --%");
   }
 
-  PutText(lines[1], 0U, "FAN:");
-  if (fan.sampleValid)
-  {
-    PutText(lines[1], 5U, fan.running ? "RUN" : "STOP");
-  }
-  else
-  {
-    PutText(lines[1], 5U, "WAIT");
-  }
+  PutDutyBar(lines[1], runtime.heaterPermille);
 
   const uint32_t elapsed = runtime.running
                                ? (now - runtime.runStartTick) / 1000U
@@ -731,6 +1158,15 @@ void RenderScreen(UiPage page, int16_t editValue, bool startSelected,
     PutText(lines[2], 0U, "ROTATE TO SET");
     PutText(lines[3], 0U, "PRESS: NEXT");
   }
+  else if (page == UiPage::SetAmbient)
+  {
+    PutText(lines[0], 0U, "ROOM TEMP CAL");
+    PutText(lines[1], 0U, "ROOM:");
+    PutTemperature(lines[1], 7U, editValue * 100);
+    lines[1][12] = 'C';
+    PutText(lines[2], 0U, "ROTATE TO SET");
+    PutText(lines[3], 0U, "PRESS: NEXT");
+  }
   else
   {
     PutText(lines[0], 0U, "START TASK?");
@@ -750,7 +1186,23 @@ void RenderScreen(UiPage page, int16_t editValue, bool startSelected,
     if (!g_displayCacheValid ||
         std::memcmp(g_displayCache[row], lines[row], sizeof(lines[row])) != 0)
     {
-      OLED_PrintString(0U, static_cast<uint8_t>(row * 2U), lines[row]);
+      if (page == UiPage::Dashboard && row == 1U)
+      {
+        for (uint8_t index = 0U; index < 16U; ++index)
+        {
+          if (!g_displayCacheValid ||
+              g_displayCache[row][index] != lines[row][index])
+          {
+            OLED_PutGlyph(index, 2U, lines[row][index] == '#'
+                                       ? kSolidRectangleGlyph
+                                       : kEmptyRectangleGlyph);
+          }
+        }
+      }
+      else
+      {
+        OLED_PrintString(0U, static_cast<uint8_t>(row * 2U), lines[row]);
+      }
       if (!OLED_IsReady())
       {
         g_displayCacheValid = false;
@@ -777,6 +1229,8 @@ int main(void)
 {
   HAL_Init();
   SystemClock_Config();
+  const uint32_t remoteRunAllowedTick =
+      HAL_GetTick() + kRemoteRunStartupGuardMs;
   MX_GPIO_Init();
   g_encoderPreviousState = ReadEncoderState();
   g_encoderTransitionAccumulator = 0;
@@ -784,10 +1238,13 @@ int main(void)
   MX_I2C1_Init();
   MX_I2C2_Init();
   MX_SPI1_Init();
+  RemoteControl_Init();
+  Telemetry_Init();
 
   InitHeaterPwm();
+  InitMotorPwm();
   RuntimeState runtime;
-  SetHeaterOutput(runtime, false);
+  SetDryingOutputs(runtime, false);
 
   HAL_Delay(100U);
   bool displayReady = OLED_Begin();
@@ -810,12 +1267,14 @@ int main(void)
     settings.targetHumidityPercent = storedSettings.target_humidity_percent;
     settings.temperatureEnabled = storedSettings.temperature_enabled;
     settings.humidityEnabled = storedSettings.humidity_enabled;
+    settings.ambientTemperatureC = storedSettings.ambient_temperature_c;
   }
 
   bool sensorStackReady = InitializeSensorStack(false);
 
   SensorData sensor;
   FanState fan;
+  RemoteState remote;
   fan.rawRunning = FanSignalIndicatesRunning();
   fan.rawChangedTick = HAL_GetTick();
 
@@ -833,11 +1292,43 @@ int main(void)
   uint32_t nextSensorReconnectTick =
       initialTick + kSensorReconnectPeriodMs;
   uint32_t nextDisplayTick = initialTick;
+  uint32_t lastTelemetryTick = initialTick;
   bool displayDirty = true;
 
   while (1)
   {
     const uint32_t now = HAL_GetTick();
+
+    RemoteControlCommand remoteCommand{};
+    for (uint8_t commandCount = 0U;
+         commandCount < kMaximumRemoteCommandsPerLoop &&
+         RemoteControl_TryRead(&remoteCommand);
+         ++commandCount)
+    {
+      const uint32_t commandNow = HAL_GetTick();
+      ApplyRemoteCommand(remoteCommand, settings, runtime, sensor, fan,
+                         settingsStorageReady, remote, commandNow,
+                         remoteRunAllowedTick);
+      page = UiPage::Dashboard;
+      draftSettings = settings;
+      editValue = settings.temperatureEnabled
+                      ? settings.targetTemperatureC
+                      : kTargetDisabled;
+      startSelected = WorkAppearsNeeded(settings, sensor);
+      displayDirty = true;
+    }
+
+    const uint32_t leaseNow = HAL_GetTick();
+    if (runtime.running && runtime.remoteOwned &&
+        leaseNow - remote.lastHeartbeatTick >= kRemoteLeaseMs)
+    {
+      StopRun(runtime, leaseNow);
+      remote.lastCommandResult = RemoteResult::LeaseExpired;
+      remote.ackSession = remote.lastCommand.session;
+      remote.ackSequence = remote.lastCommand.sequence;
+      remote.ackResult = RemoteResult::LeaseExpired;
+      displayDirty = true;
+    }
 
     if (!displayReady && TimeReached(now, nextOledProbeTick))
     {
@@ -881,7 +1372,12 @@ int main(void)
     if (sensorStackReady && !aht20MeasurementPending &&
         TimeReached(now, nextSensorTick))
     {
-      nextSensorTick = now + kSensorPeriodMs;
+      // Keep a fixed cadence; skip missed slots instead of burst sampling.
+      nextSensorTick += kSensorPeriodMs;
+      if (TimeReached(now, nextSensorTick))
+      {
+        nextSensorTick = now + kSensorPeriodMs;
+      }
       if (AHT20_StartMeasurement())
       {
         aht20MeasurementPending = true;
@@ -913,7 +1409,10 @@ int main(void)
       {
         sensor.ahtTemperatureCentiC = ahtMeasurement.temperature_centi_c;
         sensor.bmpTemperatureCentiC = bmpTemperatureCentiC;
+        sensor.temperatureCentiC = FuseTemperature(
+            sensor.ahtTemperatureCentiC, sensor.bmpTemperatureCentiC);
         sensor.humidityMilliPercent = ahtMeasurement.humidity_milli_percent;
+        sensor.sampleTickMs = aht20MeasurementStartedTick;
         sensor.valid = true;
       }
       else
@@ -927,7 +1426,19 @@ int main(void)
           LatchFault(runtime, FaultCode::Sensor, now);
         }
       }
+      SendTelemetrySnapshot(aht20MeasurementStartedTick, sensor, settings,
+                            runtime, fan, remote);
+      lastTelemetryTick = HAL_GetTick();
       displayDirty = true;
+    }
+
+    if (!sensorStackReady &&
+        HAL_GetTick() - lastTelemetryTick >= kSensorPeriodMs)
+    {
+      lastTelemetryTick = HAL_GetTick();
+      SensorData invalidSensor{};
+      SendTelemetrySnapshot(lastTelemetryTick, invalidSensor, settings,
+                            runtime, fan, remote);
     }
 
     const int8_t encoderStep = ReadEncoderStep();
@@ -945,6 +1456,16 @@ int main(void)
         AdjustOptionalTarget(editValue, encoderStep,
                              kMinimumTargetHumidityPercent,
                              kMaximumTargetHumidityPercent);
+        displayDirty = true;
+      }
+      else if (page == UiPage::SetAmbient)
+      {
+        const int16_t next = editValue + encoderStep;
+        if (next >= AMBIENT_TEMPERATURE_MIN_C &&
+            next <= AMBIENT_TEMPERATURE_MAX_C)
+        {
+          editValue = next;
+        }
         displayDirty = true;
       }
       else if (page == UiPage::StartConfirm)
@@ -989,13 +1510,19 @@ int main(void)
           draftSettings.targetHumidityPercent =
               static_cast<uint8_t>(editValue);
         }
+        editValue = draftSettings.ambientTemperatureC;
+        page = UiPage::SetAmbient;
+      }
+      else if (page == UiPage::SetAmbient)
+      {
+        draftSettings.ambientTemperatureC = static_cast<int8_t>(editValue);
         startSelected = WorkAppearsNeeded(draftSettings, sensor);
         page = UiPage::StartConfirm;
       }
       else
       {
         settings = draftSettings;
-        SetHeaterOutput(runtime, false);
+        SetDryingOutputs(runtime, false);
         if (settingsStorageReady)
         {
           const StoredSettings settingsToStore{
@@ -1003,6 +1530,7 @@ int main(void)
               settings.targetHumidityPercent,
               settings.temperatureEnabled,
               settings.humidityEnabled,
+              settings.ambientTemperatureC,
           };
           SettingsStorage_Save(&settingsToStore);
         }
@@ -1041,12 +1569,17 @@ int main(void)
                         : kTargetDisabled;
         page = UiPage::SetTemperature;
       }
-      else
+      else if (page == UiPage::SetAmbient)
       {
         editValue = draftSettings.humidityEnabled
                         ? draftSettings.targetHumidityPercent
                         : kTargetDisabled;
         page = UiPage::SetHumidity;
+      }
+      else
+      {
+        editValue = draftSettings.ambientTemperatureC;
+        page = UiPage::SetAmbient;
       }
       displayDirty = true;
     }
@@ -1055,6 +1588,7 @@ int main(void)
     {
       displayDirty = true;
     }
+    UpdateHeaterIndicator(runtime, now);
 
     if (displayReady &&
         (displayDirty || TimeReached(now, nextDisplayTick)))
@@ -1108,8 +1642,20 @@ void Error_Handler(void)
 {
   __disable_irq();
 
-  /* Force PB8 back to GPIO mode so a peripheral fault cannot leave heat on. */
-  RCC->APB2ENR |= RCC_APB2ENR_IOPBEN;
+  /* Force power-control pins low even if a timer or peripheral has failed. */
+  RCC->APB1ENR |= RCC_APB1ENR_TIM2EN | RCC_APB1ENR_TIM4EN;
+  (void)RCC->APB1ENR;
+  TIM4->CCER = 0U;
+  TIM4->CR1 = 0U;
+  TIM2->CCER = 0U;
+  TIM2->CR1 = 0U;
+  RCC->APB2ENR |= RCC_APB2ENR_IOPAEN | RCC_APB2ENR_IOPBEN;
+  (void)RCC->APB2ENR;
+  GPIOA->BRR = MOTOR_IN1_Pin | MOTOR_IN2_Pin;
+  GPIOB->BRR = XY_MOS_IN_Pin;
+  GPIOA->CRL = (GPIOA->CRL & ~((0x0FU << 0U) | (0x0FU << 8U))) |
+               (0x02U << 0U) | (0x02U << 8U);
+  GPIOA->BRR = MOTOR_IN1_Pin | MOTOR_IN2_Pin;
   GPIOB->CRH = (GPIOB->CRH & ~0x0FU) | 0x02U;
   if (kXyMosActiveHigh)
   {
