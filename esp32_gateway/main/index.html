@@ -100,11 +100,11 @@
     <form id="settingsForm" class="settings">
       <label>局域网 Wi-Fi 名称<input id="staSsid" maxlength="32" autocomplete="off"></label>
       <label>局域网 Wi-Fi 密码<input id="staPassword" type="password" maxlength="63" placeholder="留空表示保持不变" autocomplete="new-password"></label>
-      <label>备用热点名称<input id="apSsid" maxlength="32" required></label>
-      <label>备用热点密码<input id="apPassword" type="password" minlength="8" maxlength="63" placeholder="留空表示保持不变" autocomplete="new-password"></label>
+      <label>演示热点名称<input id="apSsid" maxlength="32" required></label>
+      <label>演示热点密码<input id="apPassword" type="password" minlength="8" maxlength="63" placeholder="留空表示保持不变" autocomplete="new-password"></label>
       <div class="form-actions"><button type="submit">保存并重启</button><span id="formMessage" class="form-message"></span></div>
     </form>
-    <p class="footnote">无法连接局域网时，ESP32 会开启备用热点；连接后访问 192.168.4.1 即可重新配置。</p>
+    <p class="footnote">ESP32 默认始终开启演示热点，名称为 Temperature-Gateway，地址为 192.168.4.1；配置局域网后仍可同时使用该热点。</p>
   </details>
 </main>
 <script>
@@ -272,7 +272,7 @@
   async function loadStatus() {
     try {
       const response=await fetch('/api/status',{cache:'no-store'}); if (!response.ok) throw new Error(); const status=await response.json(), wifi=status.wifi;
-      $('networkValue').textContent=wifi.sta_connected?`${wifi.sta_ssid} (${wifi.rssi} dBm)`:wifi.ap_active?`备用热点 ${wifi.ap_ssid}`:'正在连接'; $('ipValue').textContent=wifi.sta_ip||wifi.ap_ip||'--'; $('frameValue').textContent=`${status.stats.accepted_frames} / ${status.stats.parse_errors}`;
+      const networkNames=[]; if (wifi.ap_active) networkNames.push(`演示热点 ${wifi.ap_ssid}`); if (wifi.sta_connected) networkNames.push(`局域网 ${wifi.sta_ssid} (${wifi.rssi} dBm)`); $('networkValue').textContent=networkNames.join(' + ')||'正在连接'; const addresses=[]; if (wifi.ap_ip) addresses.push(`热点 ${wifi.ap_ip}`); if (wifi.sta_ip) addresses.push(`局域网 ${wifi.sta_ip}`); $('ipValue').textContent=addresses.join(' / ')||'--'; $('frameValue').textContent=`${status.stats.accepted_frames} / ${status.stats.parse_errors}`;
       if (status.data.present) { lastArrival=Date.now()-status.data.age_ms; if (!samples.length) ingest(status.data,false); else showSample(status.data); } else updateDataBadge('waiting');
       showControlStatus(status.control,status.data.present?status.data:null);
       showPidStatus(status);

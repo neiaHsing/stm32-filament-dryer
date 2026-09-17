@@ -11,7 +11,6 @@
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "freertos/timers.h"
 #include "nvs.h"
 
 #define SETTINGS_NAMESPACE "gateway"
@@ -19,7 +18,6 @@
 static const char *TAG = "wifi_manager";
 
 static SemaphoreHandle_t s_mutex;
-static TimerHandle_t s_fallback_timer;
 static esp_netif_t *s_sta_netif;
 static esp_netif_t *s_ap_netif;
 static wifi_manager_settings_t s_settings;
@@ -168,58 +166,6 @@ static esp_err_t configure_ap(void)
     return esp_wifi_set_config(WIFI_IF_AP, &config);
 }
 
-static void enable_fallback_ap(void)
-{
-    bool should_enable = false;
-    xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (!s_sta_connected && !s_ap_active) {
-        s_ap_active = true;
-        should_enable = true;
-    }
-    xSemaphoreGive(s_mutex);
-
-    if (should_enable) {
-        esp_err_t result = esp_wifi_set_mode(WIFI_MODE_APSTA);
-        if (result == ESP_OK) {
-            result = configure_ap();
-        }
-        if (result == ESP_OK) {
-            bool station_connected;
-            xSemaphoreTake(s_mutex, portMAX_DELAY);
-            station_connected = s_sta_connected;
-            if (station_connected) {
-                s_ap_active = false;
-            }
-            xSemaphoreGive(s_mutex);
-            if (station_connected) {
-                result = esp_wifi_set_mode(WIFI_MODE_STA);
-                if (result != ESP_OK) {
-                    ESP_LOGW(TAG, "Could not cancel fallback AP transition: %s",
-                             esp_err_to_name(result));
-                }
-            } else {
-                ESP_LOGW(
-                    TAG,
-                    "STA unavailable; fallback AP '%s' enabled at 192.168.4.1",
-                    s_settings.ap_ssid);
-            }
-        } else {
-            esp_wifi_set_mode(WIFI_MODE_STA);
-            xSemaphoreTake(s_mutex, portMAX_DELAY);
-            s_ap_active = false;
-            xSemaphoreGive(s_mutex);
-            ESP_LOGE(TAG, "Could not enable fallback AP: %s",
-                     esp_err_to_name(result));
-        }
-    }
-}
-
-static void fallback_timer_callback(TimerHandle_t timer)
-{
-    (void)timer;
-    enable_fallback_ap();
-}
-
 static void event_handler(void *argument, esp_event_base_t event_base,
                           int32_t event_id, void *event_data)
 {
@@ -245,24 +191,12 @@ static void event_handler(void *argument, esp_event_base_t event_base,
             if (result != ESP_OK) {
                 ESP_LOGD(TAG, "STA reconnect deferred: %s", esp_err_to_name(result));
             }
-            xTimerReset(s_fallback_timer, 0);
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *got_ip = event_data;
-        bool disable_ap = false;
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         s_sta_connected = true;
-        disable_ap = s_ap_active;
-        s_ap_active = false;
         xSemaphoreGive(s_mutex);
-        xTimerStop(s_fallback_timer, 0);
-        if (disable_ap) {
-            const esp_err_t result = esp_wifi_set_mode(WIFI_MODE_STA);
-            if (result != ESP_OK) {
-                ESP_LOGW(TAG, "Could not stop fallback AP: %s",
-                         esp_err_to_name(result));
-            }
-        }
         ESP_LOGI(TAG, "Connected to '%s', IP: " IPSTR,
                  s_settings.sta_ssid, IP2STR(&got_ip->ip_info.ip));
     }
@@ -302,13 +236,6 @@ esp_err_t wifi_manager_start(void)
     ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_NONE), TAG,
                         "Wi-Fi power-save setup failed");
 
-    s_fallback_timer = xTimerCreate(
-        "wifi_fallback", pdMS_TO_TICKS(CONFIG_GATEWAY_STA_CONNECT_TIMEOUT_SECONDS * 1000U),
-        pdFALSE, NULL, fallback_timer_callback);
-    if (s_fallback_timer == NULL) {
-        return ESP_ERR_NO_MEM;
-    }
-
     if (s_settings.sta_ssid[0] == '\0') {
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         s_ap_active = true;
@@ -317,7 +244,7 @@ esp_err_t wifi_manager_start(void)
                             "AP mode setup failed");
         ESP_RETURN_ON_ERROR(configure_ap(), TAG, "AP configuration failed");
         ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "Wi-Fi start failed");
-        ESP_LOGI(TAG, "No STA SSID configured; AP '%s' active at 192.168.4.1",
+        ESP_LOGI(TAG, "Demo AP '%s' active at 192.168.4.1 (no STA configured)",
                  s_settings.ap_ssid);
         return ESP_OK;
     }
@@ -330,16 +257,20 @@ esp_err_t wifi_manager_start(void)
     station_config.sta.threshold.authmode = WIFI_AUTH_OPEN;
     station_config.sta.pmf_cfg.capable = true;
     station_config.sta.pmf_cfg.required = false;
-    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG,
-                        "STA mode setup failed");
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_ap_active = true;
+    xSemaphoreGive(s_mutex);
+    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_APSTA), TAG,
+                        "AP+STA mode setup failed");
+    ESP_RETURN_ON_ERROR(configure_ap(), TAG, "AP configuration failed");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &station_config), TAG,
                         "STA configuration failed");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "Wi-Fi start failed");
-    if (xTimerStart(s_fallback_timer, 0) != pdPASS) {
-        ESP_LOGW(TAG, "Could not start STA fallback timer");
-    }
-    ESP_LOGI(TAG, "STA join started for '%s' (password configured=%s)",
-             s_settings.sta_ssid, s_settings.sta_password[0] != '\0' ? "yes" : "no");
+    ESP_LOGI(TAG,
+             "Demo AP '%s' active at 192.168.4.1; STA join started for '%s' "
+             "(password configured=%s)",
+             s_settings.ap_ssid, s_settings.sta_ssid,
+             s_settings.sta_password[0] != '\0' ? "yes" : "no");
     return ESP_OK;
 }
 

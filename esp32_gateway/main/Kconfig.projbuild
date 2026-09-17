@@ -4,9 +4,10 @@ config GATEWAY_WIFI_SSID
     string "Wi-Fi station SSID"
     default ""
     help
-        Existing 2.4 GHz Wi-Fi network to join. Leave empty to start the
-        fallback access point immediately. This value can also be changed
-        from the gateway Settings page and is then stored in NVS.
+        Optional existing 2.4 GHz Wi-Fi network to join. The demonstration
+        access point remains enabled at 192.168.4.1 even when this is set.
+        This value can also be changed from the gateway Settings page and is
+        then stored in NVS.
 
 config GATEWAY_WIFI_PASSWORD
     string "Wi-Fi station password"
@@ -23,19 +24,14 @@ config GATEWAY_WIFI_DEFAULTS_REVISION
         changes are preserved in NVS.
 
 config GATEWAY_AP_SSID
-    string "Fallback access point SSID"
+    string "Demonstration access point SSID"
     default "Temperature-Gateway"
 
 config GATEWAY_AP_PASSWORD
-    string "Fallback access point password"
+    string "Demonstration access point password"
     default "temperature"
     help
         Must contain 8 to 63 characters.
-
-config GATEWAY_STA_CONNECT_TIMEOUT_SECONDS
-    int "Seconds before enabling the fallback AP"
-    range 5 120
-    default 20
 
 config GATEWAY_HISTORY_SAMPLES
     int "Samples retained in ESP32 RAM"

@@ -2,6 +2,8 @@
 
 本工程适用于经典 ESP32-S、ESP32-WROOM-32 和 ESP32 DevKit 类开发板，基于 ESP-IDF。ESP32 每秒接收 STM32F103 的温湿度、当前手动室温和控制状态，在局域网网页中显示实时曲线、历史和故障；网页或 HTTP API 也可设置温湿度目标、保温前馈室温、启动、停止和清除故障。
 
+固件默认开启演示热点：SSID 为 `Temperature-Gateway`，密码为 `temperature`，网页地址为 [http://192.168.4.1](http://192.168.4.1)。即使配置了局域网 Wi-Fi，演示热点仍保持开启；局域网连接只作为额外访问路径。这样刷写后无需先配置家庭 Wi-Fi 即可现场演示。
+
 STM32 始终负责最终安全控制。ESP32 只提交期望状态，不直接驱动 PTC、电机或风扇，也不能绕过风扇、传感器和过温联锁。
 
 ## 接线
@@ -105,7 +107,7 @@ C,session,sequence,seen_tick,run,temp_en,temp,hum_en,hum,ambient,clear,persist*C
 - 最近命令的等待、应用或拒绝结果；
 - 数据失效、超过 2.5 秒未更新和连接中断提示；
 - ESP32 内存历史、扩展状态 CSV 导出、帧计数和解析错误统计；
-- 局域网和备用热点设置。
+- 局域网和常开演示热点设置。
 
 历史保存在 RAM，ESP32 重启后会清空。自动化 PID 调整期间应取消“掉电保存”，即使用 `persist=false`；只在确定最终参数需要断电保存时使用 `persist=true`，避免高频试验造成不必要的 W25Q Flash 擦写。同步写 Flash 期间安全循环无法维持实时响应，因此固件只允许在 `running=false` 时使用 `persist=true`；需要保存并启动时应先提交停止/保存命令，收到确认后再单独启动。
 
@@ -178,7 +180,7 @@ idf.py build
 idf.py -p /dev/cu.usbserial-XXXX flash monitor
 ```
 
-在 `menuconfig → Temperature gateway configuration` 中设置要加入的 2.4 GHz 网络、备用热点、联网等待时间和内存历史点数。也可连接已配置的备用热点，在网页“网络设置”中保存局域网配置；ESP32 会把设置保存到 NVS 并重启。本文不记录现场网络凭据。
+在 `menuconfig → Temperature gateway configuration` 中设置可选的 2.4 GHz 网络、常开演示热点和内存历史点数。刷写默认配置后，直接连接 `Temperature-Gateway`，访问 `http://192.168.4.1` 即可打开网页；也可在网页“网络设置”中保存局域网配置，ESP32 会把设置保存到 NVS 并重启。本文不记录现场网络凭据。
 
 ## 不依赖 ESP-IDF 的协议测试
 
